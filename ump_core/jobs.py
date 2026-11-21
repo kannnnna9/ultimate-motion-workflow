@@ -16,15 +16,18 @@ class DomainError(Exception):
         super().__init__(f"{code}{': ' + message if message else ''}")
 
 
+# The style is chosen before the script is written: a script can only be
+# written to fit a visual register once that register is known, so approving
+# the script first forced the writer to guess the look and patch it afterwards.
 STAGES = (
     "intake",
     "brief_draft",
     "brief_approved",
     "research_draft",
     "research_approved",
+    "style_approved",
     "naskah_draft",
     "naskah_approved",
-    "style_approved",
     "style_frame",
     "preview",
     "final_ready",
@@ -37,7 +40,7 @@ TARGET_STAGE = {
     "brief": "brief_draft",
     "research": "research_draft",
     "naskah": "naskah_draft",
-    "style_decision": "naskah_approved",
+    "style_decision": "research_approved",
     "style_frame": "style_approved",
     "preview": "style_frame",
     "final": "preview",
@@ -66,7 +69,9 @@ STAGE_NEXT = {
 # A document revision invalidates every approval at or after that stage.
 DOC_REVISION_ROLLBACK = {
     "naskah": "naskah_draft",
-    "style_id": "naskah_approved",
+    # The script was written to fit the chosen style, so changing the style
+    # invalidates the script as well as the style approval.
+    "style_id": "style_approved",
     "brief": "brief_draft",
     "sources": "research_draft",
 }

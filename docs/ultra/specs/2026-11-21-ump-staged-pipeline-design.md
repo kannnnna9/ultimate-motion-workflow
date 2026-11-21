@@ -145,3 +145,20 @@ Job lama tanpa kolom `stage` dianggap `style_approved` bila punya `style_id`, se
 ## Gate approval
 
 Dokumen ini butuh persetujuan operator sebelum implementasi. Setelah disetujui, berikutnya `ultra:plan` lalu `ultra:build` dengan TDD.
+
+## Amendment 2026-11-22
+
+**Urutan stage diubah:** `style_approved` pindah ke sebelum `naskah_draft`.
+
+Alasan: naskah ditulis untuk mengisi register visual tertentu. Menyusun naskah
+lebih dulu memaksa penulis menebak tampilan lalu menambal naskah saat style
+dipilih belakangan. `style_decision` kini render dari `research_approved`, dan
+revisi `style_id` menjatuhkan job ke `style_approved` (bukan `naskah_approved`)
+karena naskah yang sudah ada ditulis terhadap style lama.
+
+**Approval berbasis kalimat:** gate menerima kalimat persetujuan biasa selain
+bentuk `UMP APPROVE`. Klasifikasi mengembalikan `approve`, `reject`, atau
+`unclear`; `unclear` memunculkan `APPROVAL_UNCLEAR` sehingga pemanggil bertanya
+ulang. Pertanyaan, kalimat pengandaian, dan kalimat yang mendelegasikan penilaian
+ke model tidak pernah dianggap persetujuan. Bukti tetap hanya pesan masuk
+operator; teks assistant tidak pernah dibaca sebagai bukti.

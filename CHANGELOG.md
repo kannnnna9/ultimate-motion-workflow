@@ -2,6 +2,19 @@
 
 Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) dan [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-11-22
+
+### Added
+- Persetujuan operator dapat berupa kalimat biasa ("ya setuju", "oke lanjut", "sip gas"), tidak lagi hanya bentuk `UMP APPROVE <job> <rev> <stage> <artifact>`.
+
+### Changed
+- **Urutan pipeline:** style kini dipilih setelah riset dan **sebelum** naskah ditulis, sehingga naskah disusun untuk mengisi register visual yang sudah pasti. Urutan baru: `intake → brief → research → style → naskah → style_frame → preview → final`.
+- Merevisi `style_id` sekarang menjatuhkan job ke `style_approved`, bukan `naskah_approved`, karena naskah yang sudah ada ditulis terhadap style lama.
+- Bentuk `UMP APPROVE` tetap berlaku sebagai jalan alternatif untuk mengunci persetujuan ke artefak tertentu.
+
+### Security
+- Klasifikasi persetujuan menolak pertanyaan ("setujui?"), kalimat pengandaian atau yang mendelegasikan penilaian ke model ("anggap saja setuju", "bisa dianggap setuju", "menurutku setuju"), dan kalimat yang menyetujui dua tahap sekaligus. Semuanya menghasilkan `APPROVAL_UNCLEAR` agar ditanyakan ulang, bukan ditebak.
+
 ## [1.1.0] - 2026-11-22
 
 ### Added

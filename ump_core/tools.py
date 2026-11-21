@@ -18,6 +18,36 @@ _APPROVAL = re.compile(
     r'UMP APPROVE ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8}) '
     r'(brief|research|naskah|style|script_style|preview) ([A-Za-z0-9_-]{16})\Z')
 _AUDIO = re.compile(r'UMP VO ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8})\Z')
+# ---- sentence approval ---------------------------------------------------
+# The operator writes in Indonesian and should not have to type identifiers
+# they never see. A clear sentence of approval is taken as approval; anything
+# uncertain is classified "unclear" so the caller asks instead of guessing.
+# The evidence is always the operator's inbound message text, never model output.
+# A conditional or delegated sentence is not consent: "anggap saja setuju",
+# "bisa dianggap setuju", "karena model bilang". Only a direct statement counts.
+_HEDGE_WORDS = ("anggap", "dianggap", "anggapnya", "kalau", "kalo", "seandainya",
+                "menurutku", "menurutmu", "kayaknya", "sepertinya", "mungkin",
+                "bisa dianggap", "anggap saja", "model bilang", "asumsi")
+_APPROVE_WORDS = ("setuju", "setujui", "approve", "acc", "oke setuju",
+                  "ok setuju", "sip setuju", "lanjut", "gas", "lanjutkan", "silakan lanjut",
+                  "boleh lanjut", "terima", "terima kasih lanjut")
+_REJECT_WORDS = ("tolak", "jangan", "batal", "tidak setuju", "gak setuju", "ga setuju",
+                 "nggak setuju", "gak usah", "ga usah", "jangan lanjut", "belum setuju")
+# Stage words the operator may name to disambiguate which artefact they mean.
+_STAGE_WORDS = {
+    "brief": ("brief", "ringkasan", "ringkasan brief"),
+    "research": ("riset", "research", "penelitian", "sumber"),
+    "style": ("style", "gaya", "preset", "visual"),
+    "naskah": ("naskah", "skrip", "script", "teks"),
+    "script_style": ("style frame", "style_frame", "frame", "contoh frame"),
+    "preview": ("preview", "pratinjau", "video"),
+}
+# Matched against whole words, never substrings: "kah" lives inside "naskahnya"
+# and "apa" inside "apabila", so a substring test silently turned an approval
+# into a question.
+_QUESTION_WORDS = ("apa", "apakah", "kenapa", "mengapa", "gimana", "bagaimana",
+                   "harus", "kalau", "sih", "kah", "bisakah", "bolehkah", "perlukah")
+
 _EVENTS = {}
 _EVENT_LOCK = threading.Lock()
 _MAX_AUDIO = 20 * 1024 * 1024
@@ -26,12 +56,14 @@ _MAX_AUDIO = 20 * 1024 * 1024
 # Every pipeline step is an explicit route; anything absent is INVALID_ACTION.
 # import_naskah always lands in naskah_draft so an imported script still has to
 # be approved before a style can be chosen.
+# The style is decided before the script: research establishes the facts, the
+# style establishes the visual register, and the script is written against it.
 _STAGE_ROUTES = {
     'set_brief': (('intake',), 'brief_draft'),
     'research': (('brief_approved',), 'research_draft'),
-    'write_naskah': (('research_approved',), 'naskah_draft'),
-    'import_naskah': (('intake', 'brief_draft', 'brief_approved', 'research_approved'), 'naskah_draft'),
-    'select_style': (('naskah_approved',), 'style_approved'),
+    'select_style': (('research_approved',), 'style_approved'),
+    'write_naskah': (('style_approved',), 'naskah_draft'),
+    'import_naskah': (('intake', 'brief_draft', 'brief_approved', 'research_approved', 'style_approved'), 'naskah_draft'),
 }
 
 
@@ -68,6 +100,11 @@ def inbound(event, gateway, **_):
     key = (_home(), str(source.chat_id), str(source.user_id), str(event.message_id))
     now = time.monotonic()
     with _EVENT_LOCK:
+        # The operator's inbound text is the only evidence a gate may read.
+        # Assistant output never lands here, so the model cannot approve itself.
+        if text.strip() and not event.media_urls:
+            _EVENTS["__operator_text__"] = text
+
         for stale in [k for k, v in _EVENTS.items() if now - v[0] > 600]:
             del _EVENTS[stale]
         if len(_EVENTS) < 512:
@@ -83,15 +120,82 @@ def _event_key():
     return _home(), chat, user, msg
 
 
-def _authorization(expected, code):
-    key = _event_key()
+def classify_approval(text, awaiting):
+    """Return (verdict, stage) for one operator line.
+
+    verdict is "approve", "reject" or "unclear". A question is never an
+    approval even when it contains an approval word, and a line that names two
+    different artefacts is unclear rather than a guess between them.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return "unclear", None
+    low = " ".join(raw.lower().split())
+    # A question about approving is not an approval ("setujui?", "harus setuju gak sih").
+    words = set(re.findall(r"[a-z]+", low))
+    if "?" in low or words & set(_QUESTION_WORDS):
+        return "unclear", None
+    # A hedged or hypothetical line is not consent.
+    if any(hedge in low for hedge in _HEDGE_WORDS):
+        return "unclear", None
+    # Negation wins over any approve word the sentence also contains:
+    # "jangan lanjut" and "gak setuju" both carry an approve token.
+    if any(word in low for word in _REJECT_WORDS):
+        return "reject", None
+    approve = any(word in low for word in _APPROVE_WORDS)
+    if not approve:
+        return "unclear", None
+    named = {stage for stage, words in _STAGE_WORDS.items() if any(w in low for w in words)}
+    if len(named) > 1:
+        # "setuju brief dan riset" commits to two things at once: ask, never guess.
+        return "unclear", None
+    stage = next(iter(named)) if named else awaiting
+    return "approve", stage
+
+
+def _turn_operator_text():
+    """The operator's inbound text for the current turn, or "" when absent."""
+    return _EVENTS.get("__operator_text__", "")
+
+
+def _authorization(expected, job_id=None, rev=None, code="EXPLICIT_APPROVAL_REQUIRED"):
+    """Accept either the exact command line or a clear sentence of approval.
+
+    The exact `UMP APPROVE <job> <rev> <stage> <artifact>` form still works for
+    scripts and CLI use. For the operator in chat, the inbound message text is
+    classified: a clear approval for this artefact authorises it, a clear
+    approval for a different artefact is refused, and anything uncertain raises
+    APPROVAL_UNCLEAR so the caller asks instead of guessing.
+    """
+    # 1. the explicit command form, bound to the exact gateway event
+    try:
+        key = _event_key()
+    except DomainError:
+        key = None
+    if key is not None:
+        with _EVENT_LOCK:
+            entry = _EVENTS.get(key)
+            if entry is not None and entry[1] == expected and time.monotonic() - entry[0] <= 600:
+                _EVENTS[key] = (entry[0], '', None)
+                return entry[2] if entry[2] is not None else "ok"
+    # 2. a clear sentence of approval from the operator's inbound message
+    text = _turn_operator_text()
+    if job_id is not None:
+        verdict, stage = classify_approval(text, awaiting=expected)
+        if verdict == "reject":
+            raise DomainError("APPROVAL_REJECTED", "the operator declined")
+        if verdict == "approve" and stage == expected:
+            _consume_turn_text()
+            return "ok"
+        if verdict == "approve" or verdict == "unclear":
+            raise DomainError("APPROVAL_UNCLEAR", expected)
+    raise DomainError(code, 'the current operator message must approve this artefact')
+
+
+def _consume_turn_text():
+    """One operator message may authorise at most one artefact."""
     with _EVENT_LOCK:
-        entry = _EVENTS.get(key)
-        if entry is None or entry[1] != expected or time.monotonic() - entry[0] > 600:
-            raise DomainError(code, 'the current operator message must exactly match the requested command')
-        # A successful or failed mutation cannot reuse this particular inbound command.
-        _EVENTS[key] = (entry[0], '', None)
-        return entry[2]
+        _EVENTS["__operator_text__"] = ""
 
 
 def _attachment(store, job_id, requested):
@@ -371,7 +475,7 @@ def _job(store, action, payload):
         if stage not in STAGE_KIND:
             raise DomainError('INVALID_APPROVAL', 'unknown approval stage')
         _artifact(store, job, artifact)
-        _authorization(f'UMP APPROVE {job} {rev} {stage} {artifact}', 'EXPLICIT_APPROVAL_REQUIRED')
+        _authorization(f'UMP APPROVE {job} {rev} {stage} {artifact}', job, rev)
         return store.approve(job, rev, stage, artifact)
     patch = payload.get('patch')
     if patch is not None:
@@ -379,7 +483,7 @@ def _job(store, action, payload):
     if 'import_voice' in payload:
         if payload['import_voice'] is not True:
             raise DomainError('INVALID_PAYLOAD', 'omit import_voice or set it to true')
-        source = _authorization(f'UMP VO {job} {rev}', 'ATTACHMENT_REQUIRED')
+        source = _authorization(f'UMP VO {job} {rev}', None, None, 'ATTACHMENT_REQUIRED')
         blob = _attachment(store, job, source)
         patch = {**(patch or {}), 'voice_asset': blob, 'voice_words': (patch or {}).get('voice_words')}
         try:
