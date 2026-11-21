@@ -1,0 +1,136 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1080,height=1920"><title>UMP Cel Boil</title><script src="assets/gsap.min.js"></script><style>
+:root{--ground:#F2E7D3;--ink:#1A1512;--accent:#E8462F;--secondary:#F4B942;--paper:#F2E7D3}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
+#stage{position:relative;width:1080px;height:1920px;overflow:hidden;background:var(--paper);font-family:"Georgia",serif}
+#art{position:absolute;inset:0}
+/* paperGrain: fractal noise over everything at 13% multiply */
+#grain{position:absolute;inset:0;opacity:.13;mix-blend-mode:multiply;pointer-events:none}
+#beat{position:absolute;left:110px;right:110px;bottom:290px;z-index:6;opacity:0}
+#beat .tag{display:inline-block;font:700 30px/1 "Georgia",serif;letter-spacing:.26em;color:var(--accent);text-transform:uppercase;border-bottom:5px solid var(--accent);padding-bottom:8px}
+#beat h1{margin-top:30px;font:700 104px/1.0 Georgia,serif;color:var(--ink);letter-spacing:-.02em}
+#beat p{margin-top:26px;font:400 44px/1.40 Georgia,serif;color:var(--ink);opacity:.74;max-width:840px}
+#title{position:absolute;left:0;right:0;top:150px;text-align:center;z-index:5}
+#title span{font:700 62px/1 Georgia,serif;color:var(--ink);letter-spacing:.10em;text-transform:uppercase}
+#title .rule{width:220px;height:6px;background:var(--accent);margin:26px auto 0;border-radius:3px}
+</style></head><body data-composition-id="root" data-width="1080" data-height="1920" data-fps="30" data-duration="__UMP_DURATION__">
+<div id="cards" style="display:none">__UMP_CARDS__</div>
+<div id="stage">
+  <svg id="art" viewBox="0 0 1080 1920" preserveAspectRatio="none">
+    <defs>
+      <!-- turbulence: feTurbulence fractalNoise drives the boil displacement whose seed is re-rolled every 2 frames -->
+      <filter id="boil" x="-6%" y="-6%" width="112%" height="112%">
+        <feTurbulence id="turb" type="fractalNoise" baseFrequency="0.018" numOctaves="2" seed="3" result="n"/>
+        <feDisplacementMap in="SourceGraphic" in2="n" scale="3.4" xChannelSelector="R" yChannelSelector="G"/>
+      </filter>
+      <filter id="grainf">
+        <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" seed="11" result="g"/>
+        <feColorMatrix in="g" type="saturate" values="0"/>
+      </filter>
+    </defs>
+    <g filter="url(#boil)" stroke="var(--ink)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <!-- fills are slightly off-register, like hand colouring -->
+      <circle cx="540" cy="880" r="300" fill="var(--secondary)" stroke="none" opacity=".92" transform="translate(7,-5)"/>
+      <circle cx="540" cy="880" r="300" stroke-width="7"/>
+      <path id="swirl1" d="M300 1000 C 380 880, 520 980, 620 880 S 800 780, 840 860" stroke-width="8"/>
+      <path id="swirl2" d="M280 1090 C 420 1010, 560 1120, 700 1000" stroke-width="5" stroke="var(--accent)"/>
+      <g id="sparks"></g>
+      <path d="M150 1480 C 260 1420, 420 1520, 540 1460 S 820 1400, 930 1470" stroke-width="6"/>
+    </g>
+  </svg>
+  <svg id="grain" viewBox="0 0 1080 1920" preserveAspectRatio="none"><rect width="1080" height="1920" filter="url(#grainf)" opacity=".55"/></svg>
+  <div id="title"><span>hand made</span><div class="rule"></div></div>
+  <div id="beat"><div class="tag"></div><h1></h1><p></p></div>
+</div>
+<script>
+const EP = __UMP_EPISODE__;
+const DURATION = __UMP_DURATION__;
+/* Cards arrive as markup in #cards; read them from the DOM rather than as JSON. */
+const CARDS_NODES = Array.prototype.slice.call(document.querySelectorAll('#cards .beat'));
+const CARDS_DATA = CARDS_NODES.map(function(el){
+  return {
+    tag: (el.querySelector('.label') || {}).textContent || '',
+    headline: (el.querySelector('h2') || {}).textContent || '',
+    body: (el.querySelector('p') || {}).textContent || ''
+  };
+});
+
+
+/* Animation is on TWOS: the drawing changes every second frame at 24fps, i.e. 12 fps.
+   Every time read is quantised so nothing tweens smoothly. */
+/* onTwos: the drawing advances on twos, an effective 12 fps */
+const TWO = 2/24;
+function onTwos(t){ return Math.floor(t / TWO) * TWO; }
+
+const turb = document.getElementById('turb');
+const art = document.getElementById('art');
+
+/* Sparks: a few cel-FX strokes that pop on the beat grid. */
+const sparks = document.getElementById('sparks');
+const SPARK_POS = [[300,700],[760,660],[640,1120],[420,1180],[820,980]];
+SPARK_POS.forEach(function(p,i){
+  const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+  line.setAttribute('x1',p[0]); line.setAttribute('y1',p[1]);
+  line.setAttribute('x2',p[0]+18); line.setAttribute('y2',p[1]-22);
+  line.setAttribute('stroke-width','6'); line.setAttribute('stroke','var(--accent)');
+  line.setAttribute('opacity','0');
+  sparks.appendChild(line);
+});
+
+const tl = gsap.timeline({paused:true});
+
+/* Line boil driver: seed changes per two-frame tick so the wobble never settles. */
+tl.to({f:0},{f:Math.ceil(DURATION*30),duration:DURATION,ease:'none',onUpdate:function(){
+  const frame = Math.floor(this.targets()[0].f);
+  const tick = Math.floor(frame / 2);
+  turb.setAttribute('seed', String(3 + (tick % 7)));
+}},0);
+
+/* On-twos entrance: paper "lands", then the drawing appears. */
+tl.fromTo('#title span',{opacity:0,y:-26},{opacity:1,y:0,duration:TWO*2,ease:'steps(2)'},TWO);
+tl.fromTo('#title .rule',{scaleX:0},{scaleX:1,duration:TWO*3,ease:'steps(3)',transformOrigin:'50% 50%'},TWO*3);
+tl.fromTo('#art',{opacity:0},{opacity:1,duration:TWO,ease:'steps(1)'},0);
+
+/* Sparks pop on twos, one at a time. */
+SPARK_POS.forEach(function(_,i){
+  const t = 1.0 + i*0.36;
+  tl.fromTo(sparks.children[i],{opacity:0,scale:0.4,transformOrigin:'50% 50%'},
+    {opacity:1,scale:1,duration:TWO,ease:'steps(1)'},onTwos(t));
+  tl.to(sparks.children[i],{opacity:0,duration:TWO,ease:'steps(1)'},onTwos(t+0.30));
+});
+
+/* smear: one frame stretched 180% on a fast move, existing for 1/24 s: on a fast move one frame stretches 180% and only exists for 1 frame. */
+tl.fromTo('#swirl1',{scaleY:1,transformOrigin:'50% 50%'},{scaleY:1.8,duration:1/24,ease:'steps(1)'},1.42);
+tl.to('#swirl1',{scaleY:1,duration:1/24,ease:'steps(1)'},1.42+1/24);
+
+const BEAT_LEN = Math.max(2.1, DURATION/4);
+CARDS_DATA.forEach(function(card,i){
+  const start = onTwos(1.1 + i*BEAT_LEN);
+  if(start > DURATION-0.7) return;
+  tl.call(function(){
+    document.querySelector('#beat .tag').textContent = card.tag || ('DRAWN ' + String(i+1).padStart(2,'0'));
+    document.querySelector('#beat h1').textContent = card.headline || '';
+    document.querySelector('#beat p').textContent = card.body || '';
+  },null,start);
+  tl.fromTo('#beat',{opacity:0,y:18},{opacity:1,y:0,duration:TWO*2,ease:'steps(2)'},start);
+  tl.to('#beat',{opacity:0,duration:TWO*2,ease:'steps(2)'},start+BEAT_LEN-TWO*3);
+  /* the colour plate re-registers on each beat, like flipping to a new cel */
+  tl.call(function(){
+    const circle = document.querySelector('#art circle:nth-of-type(1)');
+    const dx = (i%2===0) ? 7 : -6;
+    const dy = (i%2===0) ? -5 : 6;
+    circle.setAttribute('transform','translate(' + dx + ',' + dy + ')');
+  },null,start);
+});
+
+/* End: title keeps boiling through the hold — that is the point of the style. */
+const END = DURATION - 1.1;
+tl.call(function(){
+  document.querySelector('#title span').textContent = 'ump';
+},null,END);
+tl.fromTo('#title span',{opacity:0,scale:1.12},{opacity:1,scale:1,duration:TWO*3,ease:'steps(3)'},END);
+
+window.__timelines={root:tl};
+window.__UMP_READY__=true;
+</script>
+</body></html>

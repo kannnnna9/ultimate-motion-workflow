@@ -6,7 +6,12 @@ Repo ini menyimpan keputusan editorial, template episode dan tooling dalam satu 
 
 ## Status
 
-- **Status:** workflow inti, acceptance gate, dan pipeline bertahap sudah di `main`. Tiga style `ready` (dark-editorial, kinetic-bold, minimal-explainer); botanical-paper masih `spec`. C1–C4 masih menunggu keputusan operator.
+- **Versi:** `1.0.0` — lihat [CHANGELOG.md](CHANGELOG.md) untuk rilis ini dan aturan penomoran berikutnya.
+- **Status:** workflow inti, acceptance gate, dan pipeline bertahap sudah di `main`. **16 preset style di registry, 15 `ready`**; botanical-paper masih `spec`. C1–C4 masih menunggu keputusan operator.
+
+Style yang siap pakai: `dark-editorial`, `kinetic-bold`, `minimal-explainer`, `line-art`, `bauhaus`, `cyber-hud`, `flat-vector`, `collage`, `morph`, `paperclip`, `pixel`, `cel-boil`, `liquid`, `aurora-glass`, `synthwave`. Semuanya komposisi HyperFrames 1080×1920 yang datanya datang dari naskah, bukan template statis.
+
+Dua style MG Styles 15 sengaja belum diadopsi karena butuh jalur render berbeda — `03-isometric` dan `04-3d-render`. Alasannya di [`docs/research/ump/expensive-styles.md`](docs/research/ump/expensive-styles.md) dan rencananya di ROADMAP bagian T10.
 
 Yang ada sekarang: template episode, dua komposisi baseline, preset onboarding, plugin Hermes, demo CSW, verifier acceptance, dan bukti verifikasi di [`docs/verification/ump.md`](docs/verification/ump.md). Checkout riset eksternal tidak dihapus otomatis; status audit dan quarantine tercatat di manifest.
 

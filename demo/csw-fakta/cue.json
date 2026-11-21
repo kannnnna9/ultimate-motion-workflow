@@ -1,0 +1,102 @@
+{
+  "cues": [
+    {
+      "action": {
+        "params": {
+          "from": "mask"
+        },
+        "target": "hero-title",
+        "type": "reveal"
+      },
+      "beat": "b001",
+      "id": "c001",
+      "sfx": null,
+      "t_ms": 100
+    },
+    {
+      "action": {
+        "params": {
+          "ease": "power2.out",
+          "to": "expand"
+        },
+        "target": "csw-ring",
+        "type": "move"
+      },
+      "beat": "b001",
+      "id": "c002",
+      "sfx": null,
+      "t_ms": 2400
+    },
+    {
+      "action": {
+        "params": {
+          "from": "fold"
+        },
+        "target": "origin-card",
+        "type": "reveal"
+      },
+      "beat": "b002",
+      "id": "c003",
+      "sfx": null,
+      "t_ms": 6500
+    },
+    {
+      "action": {
+        "params": {
+          "from": "mask"
+        },
+        "target": "five-level-stack",
+        "type": "reveal"
+      },
+      "beat": "b003",
+      "id": "c004",
+      "sfx": null,
+      "t_ms": 14500
+    },
+    {
+      "action": {
+        "params": {
+          "ease": "power2.inOut",
+          "to": "trace"
+        },
+        "target": "pedestrian-path",
+        "type": "move"
+      },
+      "beat": "b004",
+      "id": "c005",
+      "sfx": null,
+      "t_ms": 23500
+    },
+    {
+      "action": {
+        "params": {
+          "from": "mask"
+        },
+        "target": "urban-corridor",
+        "type": "reveal"
+      },
+      "beat": "b005",
+      "id": "c006",
+      "sfx": null,
+      "t_ms": 32500
+    },
+    {
+      "action": {
+        "params": {},
+        "target": "source-card",
+        "type": "hold"
+      },
+      "beat": "b005",
+      "id": "c007",
+      "sfx": null,
+      "t_ms": 42000
+    }
+  ],
+  "end_card": {
+    "hold_s": 8,
+    "start_beat": "b005"
+  },
+  "episode": "csw-fakta",
+  "fps": 30,
+  "version": 1
+}

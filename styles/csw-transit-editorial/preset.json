@@ -1,0 +1,12 @@
+{
+  "id": "csw-transit-editorial",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": ["assets/gsap.min.js"],
+  "palette": {"ground": "#A9D8EC", "ink": "#172B3A", "accent": "#124F8C", "secondary": "#E7B93D", "vegetation": "#3F7655"},
+  "typography": {"display": "DejaVu Sans", "body": "DejaVu Sans"},
+  "layout": {"kind": "layered-transit-hub", "safe_area": {"x": 110, "y": 260, "width": 860, "height": 1150}},
+  "motion": {"camera": "three-quarter-parallax", "primary": {"ease": "power2.inOut", "offset_ms": 0}, "secondary": {"stagger_ms": 140}, "ambient": {"kind": "cloud-drift", "amplitude": 0.03}},
+  "caption_safe_area": {"x": 120, "y": 1450, "width": 840, "height": 250},
+  "sources": [{"name": "reference-informed original composition", "url": "local:operator-reference"}]
+}

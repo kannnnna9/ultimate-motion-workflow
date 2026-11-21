@@ -1,0 +1,92 @@
+{
+  "beats": [
+    {
+      "estimated_s": 7,
+      "fact_refs": [
+        "bapenda_csw",
+        "wiki_csw"
+      ],
+      "id": "b001",
+      "narration": "Kalau dengar CSW, yang kebayang mungkin cuma halte. Padahal, tempat ini menyimpan cerita Jakarta yang jauh lebih panjang.",
+      "on_screen_text": "CSW BUKAN CUMA HALTE",
+      "purpose": "hook"
+    },
+    {
+      "estimated_s": 9,
+      "fact_refs": [
+        "bapenda_csw",
+        "wiki_csw"
+      ],
+      "id": "b002",
+      "narration": "Pertama, CSW bukan nama baru. Ini berasal dari Centrale Stichting Wederopbouw, lembaga yang dulu ikut mengembangkan kawasan Kebayoran Baru.",
+      "on_screen_text": "ASAL NAMA CSW",
+      "purpose": "fakta sejarah"
+    },
+    {
+      "estimated_s": 10,
+      "fact_refs": [
+        "wiki_csw"
+      ],
+      "id": "b003",
+      "narration": "Kedua, bangunan ini bukan sekadar tempat naik bus. CSW adalah simpul antarmoda lima lantai yang menghubungkan beberapa halte Transjakarta dengan akses menuju MRT ASEAN.",
+      "on_screen_text": "5 LANTAI. BANYAK MODA.",
+      "purpose": "fakta fungsi"
+    },
+    {
+      "estimated_s": 10,
+      "fact_refs": [
+        "wiki_csw"
+      ],
+      "id": "b004",
+      "narration": "Ketiga, jalur pejalan kakinya ada di lantai dua, sementara Halte CSW 1 justru berada di lantai paling atas. Jadi, bentuk melingkarnya memang dirancang untuk menyatukan pergerakan orang.",
+      "on_screen_text": "JALUR YANG MENYATUKAN",
+      "purpose": "fakta arsitektur"
+    },
+    {
+      "estimated_s": 10,
+      "fact_refs": [
+        "bappeda_jaksel",
+        "wiki_csw"
+      ],
+      "id": "b005",
+      "narration": "Dan kawasan Blok M sampai CSW sekarang diarahkan sebagai simpul transit sekaligus koridor wisata urban Jakarta Selatan. Jadi, lain kali lewat sini, lihat lagi: kamu sedang melewati sejarah kota yang dibuat bergerak.",
+      "on_screen_text": "SEJARAH YANG BERGERAK",
+      "purpose": "payoff"
+    }
+  ],
+  "episode": "csw-fakta",
+  "language": "id",
+  "sources": [
+    {
+      "accessed": "2026-11-21",
+      "id": "wiki_csw",
+      "publisher": "Wikipedia bahasa Indonesia",
+      "title": "Pumpunan moda Cakra Selaras Wahana",
+      "url": "https://id.wikipedia.org/wiki/Pumpunan_Moda_Cakra_Selaras_Wahana"
+    },
+    {
+      "accessed": "2026-11-21",
+      "id": "bapenda_csw",
+      "publisher": "Bapenda Jakarta",
+      "title": "Cakra Selaras Wahana",
+      "url": "https://bapenda.jakarta.go.id/digital/login"
+    },
+    {
+      "accessed": "2026-11-21",
+      "id": "bappeda_jaksel",
+      "publisher": "Bappeda Jakarta",
+      "title": "Rencana Strategis Kota Administrasi Jakarta Selatan 2025–2029",
+      "url": "https://bappeda.jakarta.go.id/rpjmd/storage/documents/files/34o26QjDvaSC1YMTK5WNA7EG0vZjAJxU8iNdoYw0.pdf"
+    }
+  ],
+  "target_duration_s": {
+    "max": 52,
+    "min": 38
+  },
+  "version": 1,
+  "voice": {
+    "engine": "edge",
+    "name": "id-ID-ArdiNeural",
+    "rate": "+0%"
+  }
+}

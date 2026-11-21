@@ -1,0 +1,62 @@
+{
+  "id": "paperclip",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#E9EEF2",
+    "ink": "#26313B",
+    "accent": "#FF5A36",
+    "secondary": "#6B7C8A",
+    "card": "#FFFFFF"
+  },
+  "typography": {
+    "display": "DejaVu Sans",
+    "body": "DejaVu Sans",
+    "weight": 800
+  },
+  "layout": {
+    "kind": "giant-canvas-camera",
+    "canvas": {
+      "width": 6000,
+      "height": 3000
+    },
+    "safe_area": {
+      "x": 360,
+      "y": 380,
+      "width": 1600,
+      "height": 1200
+    }
+  },
+  "motion": {
+    "camera": "giant canvas pan+zoom, long eases",
+    "easing": "power2.inOut long ease",
+    "fps": 30
+  },
+  "caption_safe_area": {
+    "x": 150,
+    "y": 1450,
+    "width": 780,
+    "height": 250
+  },
+  "signatures": [
+    "giantCanvas",
+    "sticker",
+    "camera",
+    "chartGrow",
+    "countUp",
+    "leaderLine"
+  ],
+  "sources": [
+    {
+      "repo": "mg-styles-15",
+      "commit": "8fab7eb",
+      "path": "prompts/19-paperclip.md",
+      "upstream_demo": "19-paperclip",
+      "license": "MIT"
+    }
+  ],
+  "notes": "Kanvas raksasa 6000x3000 yang digeser kamera, kartu beroutline putih tebal, grafik dan angka yang tumbuh. Foto asli tidak dipakai; penggantinya bidang kartu bernuansa foto."
+}

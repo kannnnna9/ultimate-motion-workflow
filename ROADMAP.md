@@ -63,7 +63,7 @@ Job tidak bisa melompati langkah; server menolak dengan `STAGE_ORDER`. Urutan ya
 
 ## B. Milestone v1 — status
 
-M1–M6 selesai. T1–T7 selesai. Yang tersisa di v1.0 adalah C1–C4 yang masih menunggu keputusan operator, bukan pekerjaan terjadwal.
+M1–M6 selesai. T1–T9 selesai dan dirilis sebagai `1.0.0` pada 2026-11-21. Yang tersisa di v1.0 adalah C1–C4 yang masih menunggu keputusan operator, bukan pekerjaan terjadwal.
 
 | # | Milestone | Bukti selesai |
 |---|---|---|
@@ -77,6 +77,51 @@ M1–M6 selesai. T1–T7 selesai. Yang tersisa di v1.0 adalah C1–C4 yang masih
 ### T6/T7 integration status
 
 Acceptance gate T6 sudah tersedia di `scripts/verify_ump.py`, preset `minimal-explainer` sudah bisa dibangun dan dirender, dan bukti aktual dicatat di `docs/verification/ump.md`. T7 sudah memiliki manifest dan dry-run cleanup. Lima checkout riset ditolak untuk quarantine karena dirty atau partial Git state; tidak ada penghapusan otomatis.
+
+### T9 — adopsi style MG Styles 15 (selesai, dirilis di v1.0.0)
+
+Audit T1 hanya mengambil *teknik* dari enam repo rujukan. Katalog style upstream tidak diadopsi sama sekali, sehingga UMP hanya punya tiga preset sendiri yang semuanya turunan komposisi teks. T9 menutup celah itu untuk dua belas dari lima belas style.
+
+**Yang dikerjakan:** dua belas preset ditulis ulang dari aturan visual di `prompts/` MG Styles 15, bukan disalin dari `demos/`.
+
+| Preset | Upstream | Signature |
+|---|---|---|
+| `styles/line-art/` | `prompts/02-line-art.md` | stroke-dashoffset draw-on, pen-tip glow, line-to-fill, dolly |
+| `styles/bauhaus/` | `prompts/09-bauhaus.md` | grid modular 180 px, rotasi pivot bergantian, 120 BPM, tanpa overshoot |
+| `styles/cyber-hud/` | `prompts/22-hud.md` | radar conic, lock bracket, scanline, typewriter, data rolling |
+| `styles/flat-vector/` | `prompts/01-flat-vector.md` | tanpa gradien, squash ±10%, stagger 3 frame, shape wipe |
+| `styles/collage/` | `prompts/06-collage.md` | grid 12 fps, jitter ±2 px, tepi potong putih, halftone |
+| `styles/morph/` | `prompts/08-morph.md` | 12 titik sejajar, bridge A→lingkaran→B, bidang warna per beat |
+| `styles/paperclip/` | `prompts/19-paperclip.md` | kanvas 6000×3000, kartu stiker, grafik berskala, count-up |
+| `styles/pixel/` | `prompts/20-pixel.md` | kanvas 180×320 nearest-neighbour, dither Bayer, langkah diskret |
+| `styles/cel-boil/` | `prompts/05-cel-boil.md` | feTurbulence seed per 2 frame, on twos, smear, grain kertas |
+| `styles/liquid/` | `prompts/07-liquid.md` | metaball blur+threshold tanpa WebGL, waveFront, drip |
+| `styles/aurora-glass/` | `prompts/12-aurora-glass.md` | blob ber-blur, kartu backdrop-filter, breathing |
+| `styles/synthwave/` | `prompts/10-synthwave.md` | grid `rotateX` dalam `perspective`, matahari berbanding via `mask-image`, krom `background-clip:text`, glow ganda, scanline statis |
+
+**Bukti:** 85 test lulus; `hyperframes check` 0 error untuk kedua belas preset; snapshot direview visual per preset. Kontrak yang dikunci test: `window.__timelines={root:tl}` wajib ada; `__UMP_TIMELINE__`/`addCue(` dilarang di style yang punya koreografi sendiri; `__UMP_CARDS__` dibaca dari DOM (`#cards .beat`), bukan sebagai array JSON; root wajib punya `data-width`/`data-height`/`data-duration`; animasi hanya lewat transform/opacity.
+
+**Kriteria keluar T9:** `verify_ump.py` lulus untuk kedua belas preset dan hasil render tidak lagi keluhan "cuma teks" di CSW.
+
+**Belum diadopsi:** dua style yang butuh jalur render berbeda (T10), dan lima jalur gaya Huashu.
+
+### T10 — dua style yang tidak pas di HyperFrames (exploratory, pasca-1.0)
+
+Diagnosis lengkap ada di `docs/research/ump/expensive-styles.md`. Ringkasnya: `03-isometric` dan `04-3d-render` gagal di kontrak yang sama — mereka butuh renderer yang mengerti geometri, bukan DOM yang menggeser properti.
+
+`10-synthwave` sudah diselesaikan lewat Jalur A pada T9 dan tidak lagi masuk lingkup T10.
+
+**Keputusan yang dibutuhkan sebelum mulai (D-T10):** apakah UMP menerima salah satu jalur ini, atau menutupnya eksplisit.
+
+- **Jalur A — aproksimasi DOM.** Isometric bisa ditulis sebagai SVG dengan basis proyeksi tetap. Biaya sedang. Risiko: terbaca "pura-pura 3D", dan itu lebih buruk daripada tidak ada.
+- **Jalur B — renderer kedua di balik gate.** Three.js untuk `04-3d-render` dengan WebGL software (llvmpipe ada di VM ini). Biaya tinggi. Syarat: `ump_render` berhenti mengasumsikan satu komposisi HTML, dan determinisme per GPU driver harus dijamin.
+- **Jalur C — tetap di luar lingkup.** Dicatat di README sebagai keterbatasan yang disengaja.
+
+**Rekomendasi:** C untuk bentuk sekarang; A hanya kalau `03-isometric` dibutuhkan untuk episode nyata. Setiap pilihan harus masuk ADR sebelum ada kode.
+
+**Kriteria keluar T10:** satu ADR di `docs/adr/` memilih A/B/C dengan alasan teknis, dan 15/15 style MG Styles 15 tercatat statusnya.
+
+---
 
 ### T8 — pipeline bertahap (selesai, belum dirilis)
 
@@ -150,7 +195,7 @@ Bukan roadmap, tapi menghambat M1–M5. Di spec disebut "ditinggal ke builder", 
 | [Bang Motion](https://github.com/bangtutorial/bang-motion) | `c1aa65e` (v1.19.0) | MIT — © 2026 Bang Tutorial | 4,5 MB | **Pegangan desain resmi.** `references/explainer.md` (579 baris) untuk explainer kartun + VO; `anti-ppt.md` (110) anti-slideshow; `techniques.md` (690); `architecture.md` (188) |
 | [Reanimate](https://github.com/NiazMorshed2007/reanimate) | `3f7a55a` | MIT | ±60 MB | Bedah animasi frame-by-frame (C2) |
 | [LottieFiles motion-design-skill](https://github.com/LottieFiles/motion-design-skill) | `d77a9fc` | MIT | kecil | Checklist koreografi: primary/secondary/ambient, easing, stagger |
-| [MG Styles 15](https://github.com/Vincentwei1021/mg-styles-15) | `8fab7eb` | — | ±568 MB | Kartu gaya + pola cue bersama untuk aksi dan SFX |
+| [MG Styles 15](https://github.com/Vincentwei1021/mg-styles-15) | `8fab7eb` | MIT | ±568 MB | Kartu gaya + pola cue bersama. **12 style diadopsi ulang (T9):** `01`, `02`, `05`, `06`, `07`, `08`, `09`, `10`, `12`, `19`, `20`, `22`; `03` dan `04` ditunda ke T10 |
 | [Huashu Art Motion](https://github.com/alchaincyf/huashu-art-motion) | `a97c450` | MIT | ±78 MB | Setujui style frame dulu, petakan beat narasi ke aksi |
 | [Anidoodle](https://github.com/alexgreensh/anidoodle) | `4ae27d2` | — | ±49 MB | Ilustrasi procedural deterministik (parameter + seed) |
 

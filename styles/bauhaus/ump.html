@@ -1,0 +1,36 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1080,height=1920"><title>UMP Bauhaus</title><script src="assets/gsap.min.js"></script><style>:root{--paper:#F1E9DA;--red:#E03C31;--yellow:#F2B705;--blue:#1E4FA3;--black:#111}*{box-sizing:border-box}html,body{margin:0;width:1080px;height:1920px;overflow:hidden;background:var(--paper);color:var(--black);font-family:DejaVu Sans,sans-serif}#stage{width:1080px;height:1920px;position:relative;background:var(--paper);overflow:hidden}.shape{z-index:1}.vtitle{z-index:2}#grid{position:absolute;inset:0;width:1080px;height:1920px}#grid line{stroke:var(--black);stroke-width:1;opacity:.16}.shape{position:absolute;will-change:transform}.quarter{width:180px;height:180px;border-radius:0 0 180px 0}#r1{background:var(--red)}#r2{background:var(--blue);border-radius:180px 0 0 0}#r3{background:var(--yellow);border-radius:90px}#r4{background:var(--black)}.tri{width:0;height:0;border-left:110px solid transparent;border-right:110px solid transparent;border-bottom:190px solid var(--blue)}#sq{width:180px;height:180px;background:var(--red)}#sq2{width:180px;height:180px;background:var(--yellow)}#half{width:180px;height:90px;background:var(--black);border-radius:90px 90px 0 0}#bar{width:540px;height:36px;background:var(--black)}.poster{position:absolute;left:120px;top:300px;width:840px;opacity:0}.poster h2{font-family:DejaVu Sans,sans-serif;font-weight:800;font-size:92px;line-height:.92;letter-spacing:-.02em;margin:0;color:var(--black);text-transform:uppercase}.vtitle{position:absolute;left:96px;top:340px;writing-mode:vertical-rl;text-orientation:mixed;font-weight:800;font-size:150px;letter-spacing:.02em;color:var(--black);text-transform:uppercase;opacity:0}.beat{position:absolute;left:150px;width:780px;bottom:420px;opacity:0;z-index:5;background:rgba(241,233,218,.92);padding:28px 24px}.beat .label{font:700 24px DejaVu Sans,monospace;letter-spacing:.34em;color:var(--blue);text-transform:uppercase}.beat h2{font-size:76px;font-weight:800;line-height:1.02;margin:20px 0 0;color:var(--black);text-transform:uppercase}.beat p{font-size:32px;line-height:1.32;color:#3A3A3A;margin:18px 0 0}.beat .rule{width:120px;height:8px;background:var(--red);margin-top:22px}.tick{position:absolute;left:120px;bottom:300px;font:700 22px DejaVu Sans,monospace;letter-spacing:.3em;color:var(--black);opacity:.55}</style></head><body><main id="stage" data-composition-id="root" data-width="1080" data-height="1920" data-fps="30" data-duration="__UMP_DURATION__"><svg id="grid" viewBox="0 0 1080 1920" preserveAspectRatio="none"><line x1="120" y1="0" x2="120" y2="1920"/><line x1="300" y1="0" x2="300" y2="1920"/><line x1="480" y1="0" x2="480" y2="1920"/><line x1="660" y1="0" x2="660" y2="1920"/><line x1="840" y1="0" x2="840" y2="1920"/><line x1="0" y1="300" x2="1080" y2="300"/><line x1="0" y1="480" x2="1080" y2="480"/><line x1="0" y1="660" x2="1080" y2="660"/><line x1="0" y1="840" x2="1080" y2="840"/><line x1="0" y1="1020" x2="1080" y2="1020"/><line x1="0" y1="1200" x2="1080" y2="1200"/><line x1="0" y1="1380" x2="1080" y2="1380"/></svg><div class="shape quarter" id="r1" style="left:120px;top:420px"></div><div class="shape quarter" id="r2" style="left:780px;top:420px"></div><div class="shape" id="r3" style="left:300px;top:300px"></div><div class="shape tri" id="r4" style="left:120px;top:900px"></div><div class="shape" id="sq" style="left:480px;top:780px"></div><div class="shape" id="sq2" style="left:780px;top:960px"></div><div class="shape" id="half" style="left:120px;top:1140px"></div><div class="shape" id="bar" style="left:120px;top:1320px"></div><div class="vtitle">U M P</div>__UMP_CARDS__<div class="tick">FORM · FARBE · FUNKTION</div></main><script>
+// signatures: modular rotation power2.inOut vertical
+window.__EPISODE__=__UMP_EPISODE__;
+const ep=window.__EPISODE__;
+const S=document.getElementById('stage');
+const tl=gsap.timeline({paused:true});
+const frameAt=f=>f/30;
+const gridLines=[...document.querySelectorAll('#grid line')];
+gridLines.forEach((l,i)=>{const len=l.getTotalLength();l.style.strokeDasharray=len;l.style.strokeDashoffset=len;
+  tl.fromTo(l,{strokeDashoffset:len},{strokeDashoffset:0,duration:.42,ease:'power2.inOut',immediateRender:false},i*0.012);});
+const BEAT=0.5;
+const shapes=['#r1','#r2','#r3','#r4','#sq','#sq2','#half','#bar'];
+const pivots=['50% 50%','0% 100%','100% 0%','50% 50%'];
+shapes.forEach((sel,i)=>{
+  const el=document.querySelector(sel);
+  const at=0.45+i*BEAT*0.5;
+  gsap.set(el,{transformOrigin:pivots[i%pivots.length],opacity:0});
+  tl.fromTo(el,{opacity:0,scale:.62},{opacity:1,scale:1,duration:.26,ease:'power2.inOut',immediateRender:false},at);
+  tl.to(el,{rotation:i%2===0?90:-90,duration:BEAT,ease:'power2.inOut',transformOrigin:pivots[(i+1)%pivots.length]},2.0+i*0.22);
+  tl.to(el,{x:i%2===0?180:-180,duration:BEAT,ease:'linear'},4.2+i*0.18);
+});
+tl.fromTo('.vtitle',{opacity:0,x:-40},{opacity:1,x:0,duration:.8,ease:'power2.inOut',immediateRender:false},5.6);
+tl.to(shapes.map(s=>document.querySelector(s)),{scale:.82,opacity:.9,duration:.6,ease:'power2.inOut',stagger:.05},7.0);
+function showCard(el,at){
+  cards.forEach(o=>{if(o!==el)tl.set(o,{opacity:0},at);});
+  tl.fromTo(el,{opacity:0,y:22},{opacity:1,y:0,duration:.5,ease:'power2.inOut',immediateRender:false},at);
+  tl.fromTo(el.querySelector('h2'),{y:12},{y:0,duration:.5,ease:'power2.inOut',immediateRender:false},at);
+}
+const cards=[...document.querySelectorAll('.beat')];
+window.__umpPlay=(frame)=>{const t=frameAt(frame);tl.seek(t,false);};
+if(window.HyperFrames&&HyperFrames.setFrame){HyperFrames.setFrame(window.__umpPlay);}
+window.__umpSeek=(frame)=>tl.seek(frameAt(frame),false);
+ep.cues.forEach((c)=>{const card=cards.find(x=>x.dataset.beat===c.beat);if(!card)return;tl.call(()=>showCard(card,frameAt(c.visual_frame)),null,frameAt(c.visual_frame));});
+window.__timelines={root:tl};
+window.__UMP_READY__=true;
+</script></body></html>

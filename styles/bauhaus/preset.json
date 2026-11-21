@@ -1,0 +1,38 @@
+{
+  "id": "bauhaus",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": ["assets/gsap.min.js"],
+  "palette": {
+    "ground": "#F1E9DA",
+    "ink": "#111111",
+    "accent": "#E03C31",
+    "secondary": "#1E4FA3",
+    "tertiary": "#F2B705"
+  },
+  "typography": {
+    "display": "DejaVu Sans",
+    "body": "DejaVu Sans",
+    "weight": 800
+  },
+  "layout": {
+    "kind": "modular-grid",
+    "module_px": 180,
+    "safe_area": { "x": 120, "y": 260, "width": 840, "height": 1150 }
+  },
+  "motion": {
+    "camera": "static-grid",
+    "bpm": 120,
+    "primary": { "ease": "power2.inOut", "offset_ms": 0 },
+    "secondary": { "stagger_ms": 180 },
+    "ambient": { "kind": "grid-phase-shift", "amplitude": 0.04 }
+  },
+  "caption_safe_area": { "x": 150, "y": 1450, "width": 780, "height": 250 },
+  "signatures": ["modular", "rotation", "power2.inOut", "vertical"],
+  "sources": [
+    {
+      "name": "MG Styles 15 — 09-bauhaus prompt",
+      "url": "https://github.com/Vincentwei1021/mg-styles-15/blob/8fab7eb49cc60590c518d1a932dfff753697fce7/prompts/09-bauhaus.md"
+    }
+  ]
+}

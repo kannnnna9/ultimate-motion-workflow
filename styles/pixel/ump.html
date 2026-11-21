@@ -1,0 +1,177 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1080,height=1920"><title>UMP Pixel</title><script src="assets/gsap.min.js"></script><style>
+:root{--ground:#0E0A18;--ink:#F4F1E8;--accent:#FF3D7F;--secondary:#00D9C0;--support:#FFC857}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
+#stage{position:relative;width:1080px;height:1920px;overflow:hidden;background:var(--ground);display:flex;align-items:center;justify-content:center}
+/* 180x320 internal, integer-scaled x6 -> 1080x1920. Nearest-neighbour only. */
+#screen{width:1080px;height:1920px;image-rendering:pixelated;image-rendering:crisp-edges}
+#scan{position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,.16) 0px,rgba(0,0,0,.16) 2px,transparent 2px,transparent 4px);mix-blend-mode:multiply}
+#beat{position:absolute;left:60px;right:60px;bottom:190px;text-align:center;z-index:5;opacity:0}
+#beat .tag{display:inline-block;background:var(--accent);color:#0E0A18;font:700 30px/1 "Courier New",monospace;padding:10px 20px;letter-spacing:.18em}
+#beat h1{margin-top:22px;font:700 74px/1.06 "Courier New",monospace;color:var(--ink);text-transform:uppercase;letter-spacing:.02em;text-shadow:6px 6px 0 #0E0A18}
+#beat p{margin-top:20px;font:400 38px/1.36 "Courier New",monospace;color:var(--support)}
+</style></head><body data-composition-id="root" data-width="1080" data-height="1920" data-fps="30" data-duration="__UMP_DURATION__">
+<div id="cards" style="display:none">__UMP_CARDS__</div>
+<div id="stage">
+  <canvas id="screen" width="180" height="320"></canvas>
+  <div id="scan"></div>
+  <div id="beat"><div class="tag"></div><h1></h1><p></p></div>
+</div>
+<script>
+const EP = __UMP_EPISODE__;
+const DURATION = __UMP_DURATION__;
+/* Cards arrive as markup in #cards; read them from the DOM rather than as JSON. */
+const CARDS_NODES = Array.prototype.slice.call(document.querySelectorAll('#cards .beat'));
+const CARDS_DATA = CARDS_NODES.map(function(el){
+  return {
+    tag: (el.querySelector('.label') || {}).textContent || '',
+    headline: (el.querySelector('h2') || {}).textContent || '',
+    body: (el.querySelector('p') || {}).textContent || ''
+  };
+});
+
+const cv = document.getElementById('screen');
+const g = cv.getContext('2d');
+g.imageSmoothingEnabled = false;
+const W = 180, H = 320;
+
+const PAL = ['#0E0A18','#1E1638','#3A2A6B','#FF3D7F','#00D9C0','#FFC857','#F4F1E8'];
+
+/* Sprites are authored as pixel arrays, not scaled rects. */
+function sprite(rows, map){
+  return rows.map(function(r){ return r.split('').map(function(c){ return map[c] || null; }); });
+}
+const HERO = sprite([
+  '..1111..',
+  '.111111.',
+  '.122221.',
+  '.111111.',
+  '..1111..',
+  '.111111.',
+  '.1.11.1.',
+  '.1....1.'
+], {'1':'#F4F1E8','2':'#FF3D7F'});
+const HERO_JUMP = sprite([
+  '..1111..',
+  '.111111.',
+  '.122221.',
+  '.111111.',
+  '.111111.',
+  '..1111..',
+  '.11..11.',
+  '11....11'
+], {'1':'#F4F1E8','2':'#FF3D7F'});
+
+function drawSprite(s, x, y, flip){
+  x = Math.round(x); y = Math.round(y);
+  s.forEach(function(row,ry){
+    row.forEach(function(c,rx){
+      if(!c) return;
+      g.fillStyle = c;
+      g.fillRect(flip ? x + (row.length-1-rx) : x + rx, y + ry, 1, 1);
+    });
+  });
+}
+
+/* dithered sky: two-colour ordered dither, never a smooth gradient */
+const BAYER = [[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+function sky(t){
+  const band = Math.floor(t*2) % 2;
+  g.fillStyle = PAL[0]; g.fillRect(0,0,W,H);
+  for(let y=0;y<H*0.72;y+=2){
+    for(let x=0;x<W;x+=2){
+      const d = (y/(H*0.72))*14 + band;
+      if(BAYER[(y/2)%4][(x/2)%4] < d){
+        g.fillStyle = y < H*0.4 ? PAL[2] : PAL[1];
+        g.fillRect(x,y,2,2);
+      }
+    }
+  }
+}
+
+/* parallax layers move by whole pixels only */
+function mountains(t){
+  const off = Math.round(t*6) % 60;
+  g.fillStyle = PAL[2];
+  for(let i=-1;i<4;i++){
+    const bx = i*60 - off;
+    for(let k=0;k<60;k++){
+      const hgt = 40 - Math.abs(30-k);
+      g.fillRect(bx+k, 196-hgt, 1, hgt);
+    }
+  }
+}
+function ground(t){
+  const off = Math.round(t*14) % 16;
+  g.fillStyle = PAL[1];
+  g.fillRect(0,232,W,H-232);
+  g.fillStyle = PAL[3];
+  for(let x=-16;x<W+16;x+=16){
+    g.fillRect(x-off,236,8,2);
+  }
+}
+
+/* discrete helpers: everything snaps to an integer frame */
+const FPS = 12;
+function stepTime(t){ return Math.floor(t*FPS)/FPS; }
+
+function draw(t){
+  const st = stepTime(t);
+  sky(st);
+  mountains(st);
+  ground(st);
+  const beat = Math.floor(st / 1.6);
+  const local = st - beat*1.6;
+  const jumping = local > 0.55 && local < 1.05;
+  const bob = Math.floor(Math.sin(st*FPS*0.6)*1);
+  const walkX = 26 + ((st*22) % 120);
+  drawSprite(jumping ? HERO_JUMP : HERO, walkX, jumping ? 196 : 200 + bob, false);
+  if(jumping){
+    g.fillStyle = PAL[5];
+    g.fillRect(Math.round(walkX+4), 192, 1, 1);
+  }
+  /* coin */
+  const coinPhase = Math.floor(st*FPS) % 4;
+  if(coinPhase !== 3){
+    g.fillStyle = PAL[5];
+    g.fillRect(96, 170 + Math.round(Math.sin(st*2)*2), 4, 6);
+  }
+  /* dialogue box */
+  g.fillStyle = PAL[0]; g.fillRect(12,262,156,44);
+  g.strokeStyle = PAL[6]; g.lineWidth = 1; g.strokeRect(12.5,262.5,156,44);
+  g.fillStyle = PAL[6];
+  for(let i=0;i<Math.min(14, Math.floor(local*22));i++){
+    g.fillRect(20+i*10,278,6,1);
+  }
+}
+
+const tl = gsap.timeline({paused:true});
+tl.to({f:0},{f:DURATION*30,duration:DURATION,ease:'none',onUpdate:function(){
+  draw(this.targets()[0].f/30);
+}},0);
+
+const BEAT_LEN = Math.max(2.4, DURATION/3);
+CARDS_DATA.forEach(function(card,i){
+  const start = Math.floor((0.6 + i*BEAT_LEN)*FPS)/FPS;
+  if(start > DURATION-0.6) return;
+  tl.call(function(){
+    document.querySelector('#beat .tag').textContent = card.tag || ('STAGE ' + String(i+1).padStart(2,'0'));
+    document.querySelector('#beat h1').textContent = card.headline || '';
+    document.querySelector('#beat p').textContent = card.body || '';
+  },null,start);
+  tl.fromTo('#beat',{opacity:0},{opacity:1,duration:0.001,ease:'steps(1)'},start);
+  tl.to('#beat',{opacity:0,duration:0.001,ease:'steps(1)'},start+BEAT_LEN-0.30);
+});
+
+tl.call(function(){
+  document.querySelector('#beat .tag').textContent = 'PIXEL';
+  document.querySelector('#beat h1').textContent = 'UMP';
+  document.querySelector('#beat p').textContent = 'Satu frame, satu ketukan.';
+},null,DURATION-0.5);
+tl.fromTo('#beat',{opacity:0},{opacity:1,duration:0.001,ease:'steps(1)'},DURATION-0.5);
+
+/* nearestNeighbor: image-rendering pixelated, all sprite coords rounded to integers */
+window.__timelines={root:tl};
+window.__UMP_READY__=true;
+</script>
+</body></html>

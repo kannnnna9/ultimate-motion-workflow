@@ -1,0 +1,136 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1080,height=1920"><title>UMP Paperclip</title><script src="assets/gsap.min.js"></script><style>
+:root{--ground:#E9EEF2;--ink:#26313B;--accent:#FF5A36;--secondary:#6B7C8A;--card:#FFFFFF}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
+#stage{position:relative;width:1080px;height:1920px;overflow:hidden;background:var(--ground);font-family:"Inter","Helvetica Neue",Arial,sans-serif}
+#camera{position:absolute;width:6000px;height:3000px;left:0;top:0;transform-origin:0 0;will-change:transform}
+.sticker{position:absolute;background:var(--card);border:10px solid #fff;border-radius:26px;box-shadow:0 24px 60px rgba(38,49,59,.16)}
+.sticker .photo{position:absolute;inset:0;border-radius:18px;overflow:hidden}
+.sticker .photo .grad{position:absolute;inset:0}
+.sticker .cap{position:absolute;left:26px;bottom:22px;font:800 46px/1 "Inter",sans-serif;color:var(--ink);letter-spacing:-.02em}
+.marker{position:absolute;width:74px;height:74px;border-radius:50%;background:var(--accent);color:#fff;font:800 36px/74px "Inter",sans-serif;text-align:center}
+.lead{position:absolute;height:4px;background:var(--accent);transform-origin:0 50%}
+.lbl{position:absolute;font:700 44px/1.15 "Inter",sans-serif;color:var(--ink)}
+.lbl small{display:block;font:500 30px/1.3 "Inter",sans-serif;color:var(--secondary);margin-top:10px}
+#chart{position:absolute;left:2700px;top:1300px;width:2400px;height:1100px;background:#fff;border-radius:34px;border:10px solid #fff;box-shadow:0 30px 80px rgba(38,49,59,.18)}
+#chart .title{position:absolute;left:60px;top:44px;font:800 52px/1 "Inter",sans-serif;color:var(--ink)}
+#chart .axis{position:absolute;left:60px;right:60px;bottom:70px;height:2px;background:#D6DEE5}
+.bar{position:absolute;bottom:70px;width:150px;max-height:640px;background:var(--accent);border-radius:12px 12px 0 0;transform-origin:50% 100%;transform:scaleY(0)}
+.bar .v{position:absolute;left:-30px;width:210px;top:16px;text-align:center;font:800 34px/1 "Inter",sans-serif;color:#fff}
+#bignum{position:absolute;left:3260px;top:1560px;font:900 380px/0.9 "Inter",sans-serif;color:var(--ink);letter-spacing:-.05em}
+#bignum sub{font:700 120px/1 "Inter",sans-serif;color:#26313B;vertical-align:baseline;opacity:1}
+#endcard{position:absolute;left:3600px;top:240px;width:1900px}
+#endcard h2{font:900 150px/0.94 "Inter",sans-serif;color:var(--ink);letter-spacing:-.04em}
+#endcard p{margin-top:36px;font:500 54px/1.35 "Inter",sans-serif;color:var(--secondary);max-width:1700px}
+#tag{position:absolute;left:420px;top:380px;background:var(--ink);color:#fff;font:800 40px/1 "Inter",sans-serif;padding:18px 34px;border-radius:12px;letter-spacing:.08em}
+</style></head><body data-composition-id="root" data-width="1080" data-height="1920" data-fps="30" data-duration="__UMP_DURATION__">
+<div id="cards" style="display:none">__UMP_CARDS__</div>
+<div id="stage"><div id="camera">
+  <div id="tag"></div>
+  <div class="sticker" id="s1" style="left:400px;top:540px;width:1200px;height:760px">
+    <div class="photo"><div class="grad" style="background:linear-gradient(140deg,#9FB3C4,#5B7186)"></div></div>
+    <div class="cap">objek utama</div>
+  </div>
+  <div class="marker" style="left:1500px;top:960px">1</div>
+  <div class="lead" id="lead1" style="left:1560px;top:990px;width:420px"></div>
+  <div class="lbl" id="lbl1" style="left:2000px;top:940px">Komponen<small>tiap bagian diberi label</small></div>
+
+  <div class="sticker" id="s2" style="left:2700px;top:520px;width:900px;height:640px">
+    <div class="photo"><div class="grad" style="background:linear-gradient(150deg,#C8D5DF,#7E93A5)"></div></div>
+    <div class="cap">data</div>
+  </div>
+  <div id="chart">
+    <div class="title">Distribusi per bagian</div>
+    <div class="axis"></div>
+  </div>
+  <div id="bignum" data-layout-allow-overlap>0<sub>%</sub></div>
+  <div id="endcard"><h2></h2><p></p></div>
+</div></div>
+<script>
+const EP = __UMP_EPISODE__;
+const DURATION = __UMP_DURATION__;
+/* Cards arrive as markup in #cards; read them from the DOM rather than as JSON. */
+const CARDS_NODES = Array.prototype.slice.call(document.querySelectorAll('#cards .beat'));
+const CARDS_DATA = CARDS_NODES.map(function(el){
+  return {
+    tag: (el.querySelector('.label') || {}).textContent || '',
+    headline: (el.querySelector('h2') || {}).textContent || '',
+    body: (el.querySelector('p') || {}).textContent || ''
+  };
+});
+
+const camera = document.getElementById('camera');
+const chart = document.getElementById('chart');
+
+/* Exact, to-scale bars. Values are fixed so the chart never contradicts itself. */
+const SERIES = [62, 48, 71, 35, 56];
+SERIES.forEach(function(v,i){
+  const b = document.createElement('div');
+  b.className='bar';
+  b.style.left = (140 + i*380) + 'px';
+  b.style.height = (v * 7) + 'px';
+  b.style.bottom = '70px';
+  b.innerHTML = '<span class="v">' + v + '</span>';
+  chart.appendChild(b);   /* chartGrow: bars scale from the baseline to scale */
+});
+
+/* Camera stops are keyed to beats: each beat holds a framing on the giant canvas. */
+const STOPS = [
+  {x:-260,  y:-260, s:0.92},
+  {x:-1480, y:-420, s:0.86},
+  {x:-2520, y:-560, s:0.80},
+  {x:-3080, y:-980, s:0.74},
+  {x:-3400, y:-1300, s:0.70}
+];
+
+const tl = gsap.timeline({paused:true, defaults:{ease:'power2.inOut'}});
+const BEAT_LEN = Math.max(2.2, DURATION/4);
+
+tl.set(camera,{x:STOPS[0].x,y:STOPS[0].y,scale:STOPS[0].s});
+
+CARDS_DATA.forEach(function(card,i){
+  const start = 0.35 + i*BEAT_LEN;
+  if(start > DURATION - 0.7) return;
+
+  tl.call(function(){
+    document.getElementById('tag').textContent = card.tag || ('BEAT ' + String(i+1).padStart(2,'0'));
+    document.getElementById('endcard').querySelector('h2').textContent = card.headline || '';
+    document.getElementById('endcard').querySelector('p').textContent = card.body || '';
+  },null,start);
+
+  /* camera pan/zoom between stops, long ease, one continuous path */
+  const s = STOPS[Math.min(i, STOPS.length-1)];
+  tl.to(camera,{x:s.x,y:s.y,scale:s.s,duration:BEAT_LEN*0.72,ease:'power3.inOut'},start);
+
+  /* stickers slam down like paper on a wall, then settle */
+  if(i===0) tl.fromTo('#s1',{y:-40,opacity:0,rotate:-2},{y:0,opacity:1,rotate:0,duration:0.5,ease:'power3.out'},start);
+  if(i===1) tl.fromTo('#s2',{y:-40,opacity:0,rotate:2},{y:0,opacity:1,rotate:0,duration:0.5,ease:'power3.out'},start);
+  /* leaderLine: the connector draws first, the label follows, label fades in behind it */
+  if(i===1){
+    tl.fromTo('#lead1',{scaleX:0},{scaleX:1,duration:0.34,ease:'power2.out'},start+0.14);
+    tl.fromTo('#lbl1',{opacity:0,x:-20},{opacity:1,x:0,duration:0.3,ease:'power2.out'},start+0.36);
+  }
+  /* bars grow to scale, numbers count up */
+  if(i===2){
+    tl.fromTo('.bar',{scaleY:0},{scaleY:1,duration:0.5,stagger:0.09,ease:'power2.out'},start+0.20);
+    const counter = {v:0};   /* countUp: the number rolls to its true total */
+    const sub = document.querySelector('#bignum sub');
+    tl.to(counter,{v:71,duration:0.9,ease:'power2.out',onUpdate:function(){
+      document.getElementById('bignum').firstChild.textContent = Math.round(counter.v);
+    }},start+0.24);
+  }
+  /* end card typography in the PaperClip manner: huge number, small caption */
+  if(i>=3){
+    tl.fromTo('#endcard h2',{opacity:0,y:50},{opacity:1,y:0,duration:0.6,ease:'power3.out'},start+0.18);
+    tl.fromTo('#endcard p',{opacity:0,y:30},{opacity:1,y:0,duration:0.5,ease:'power3.out'},start+0.40);
+  }
+});
+
+const END = STOPS[STOPS.length-1];
+tl.to(camera,{x:END.x-60,y:END.y-40,scale:END.s*1.02,duration:DURATION-0.1,ease:'none'},DURATION-0.1);
+
+/* giantCanvas: 6000x3000 layout surface, camera pans across it */
+window.__timelines={root:tl};
+window.__UMP_READY__=true;
+</script>
+</body></html>

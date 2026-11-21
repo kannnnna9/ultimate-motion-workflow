@@ -1,0 +1,60 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1080,height=1920"><title>UMP Line Art</title><script src="assets/gsap.min.js"></script><style>:root{--ground:#0B1320;--ink:#E9D7A5;--dim:#4A5568;--glow:#E9D7A5}*{box-sizing:border-box}html,body{margin:0;width:1080px;height:1920px;overflow:hidden;background:var(--ground);color:var(--ink);font-family:DejaVu Sans,sans-serif}#stage{width:1080px;height:1920px;position:relative;background:radial-gradient(ellipse at 50% 42%,#132133 0%,#0B1320 62%)}#ink{position:absolute;inset:0;width:1080px;height:1920px}#ink path,#ink circle,#ink rect,#ink line,#ink polyline{fill:none;stroke:var(--ink);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}#ink .fillable{fill:var(--ink);fill-opacity:0;stroke-opacity:1}#tipline{stroke:var(--glow);stroke-width:3;filter:drop-shadow(0 0 10px rgba(233,215,165,.85))}#tip{position:absolute;width:16px;height:16px;border-radius:50%;background:var(--glow);box-shadow:0 0 26px 8px rgba(233,215,165,.45);opacity:0;left:-8px;top:-8px}.beat{position:absolute;left:150px;width:780px;bottom:430px;opacity:0;text-align:center}.label{font:400 22px DejaVu Sans,monospace;letter-spacing:.34em;color:var(--dim);text-transform:uppercase}h2{font-family:DejaVu Serif,serif;font-weight:400;font-size:70px;line-height:1.12;letter-spacing:.16em;margin:26px 0 0;color:var(--ink);text-transform:uppercase}p{font-size:32px;line-height:1.35;letter-spacing:.02em;color:#B8AE8B;margin:20px 0 0}.wordmark{position:absolute;left:0;width:1080px;top:220px;text-align:center;font-family:DejaVu Serif,serif;font-size:34px;letter-spacing:.62em;color:var(--ink);opacity:0;text-transform:uppercase}.horizon{opacity:.35}</style></head><body><main id="stage" data-composition-id="root" data-width="1080" data-height="1920" data-fps="30" data-duration="__UMP_DURATION__"><svg id="ink" viewBox="0 0 1080 1920" preserveAspectRatio="none"><path id="p1" d="M150 1180 C 250 1060, 300 980, 380 940 C 470 894, 520 960, 470 1030 C 430 1086, 350 1074, 330 1000 C 306 912, 400 840, 520 816"/><path id="p2" d="M520 816 C 640 792, 760 800, 820 870 C 870 928, 812 992, 742 984 C 676 976, 650 900, 700 858 C 760 808, 860 826, 906 900"/><path id="p3" d="M906 900 L 906 700 L 742 700 L 742 900"/><path id="p4" d="M906 760 L 742 900 M 742 760 L 906 900"/><path id="p5" class="fillable" d="M906 700 L 990 770 L 962 866 L 850 866 L 822 770 Z"/><path class="horizon" d="M60 1240 L 1020 1240"/><path class="horizon" d="M60 1268 L 1020 1268"/><circle id="tipring" cx="0" cy="0" r="9"/></svg><div id="tip"></div><div class="wordmark" id="wordmark">U M P &nbsp; S T U D I O</div>__UMP_CARDS__</main><script>
+// signatures: stroke-dashoffset pen-tip line-to-fill dolly
+window.__EPISODE__=__UMP_EPISODE__;
+const ep=window.__EPISODE__;
+const S=document.getElementById('stage');
+const INK=document.getElementById('ink');
+const tip=document.getElementById('tip');
+const tipring=document.getElementById('tipring');
+const paths=[...INK.querySelectorAll('path')];
+const tl=gsap.timeline({paused:true});
+const frameAt=f=>f/30;
+const DASH=2400;
+paths.forEach(p=>{p.style.strokeDasharray=DASH;p.style.strokeDashoffset=DASH;});
+
+function totalLength(el){try{return el.getTotalLength();}catch(e){return DASH;}}
+function drawPath(el,at,dur){
+  const len=totalLength(el);
+  el.style.strokeDasharray=len;
+  tl.fromTo(el,{strokeDashoffset:len},{strokeDashoffset:0,duration:dur,ease:'power2.inOut',immediateRender:false},at);
+  tl.to(el,{opacity:.35,duration:.5,ease:'power1.out'},at+dur+1.2);
+  tl.fromTo(tip,{opacity:1},{opacity:0,duration:.25},at);
+  tl.set(tip,{opacity:1},at);
+  tl.to(tip,{opacity:0,duration:.2},at+dur);
+  return at+dur;
+}
+const cards=[...document.querySelectorAll('.beat')];
+let cursor=0.15;
+const plan=[['p1',1.5],['p2',1.3],['p3',1.0],['p4',0.7],['p5',1.1]];
+plan.forEach(([id,dur])=>{
+  const el=document.getElementById(id);
+  if(!el)return;
+  if(el.classList.contains('fillable')){
+    el.style.strokeDasharray='none';
+    el.style.strokeDashoffset=0;
+    tl.fromTo(el,{fillOpacity:0},{fillOpacity:.92,duration:.9,ease:'power2.inOut',immediateRender:false},cursor);
+    tl.fromTo(el,{opacity:0},{opacity:1,duration:.3},cursor);
+    cursor+=1.0;
+  } else {
+    cursor=drawPath(el,cursor,dur)+.12;
+  }
+});
+tl.to('#p1,#p2',{opacity:.18,duration:.6},cursor);
+tl.fromTo('#wordmark',{opacity:0,y:18},{opacity:1,y:0,duration:1.0,ease:'power2.out',immediateRender:false},cursor+.1);
+function showCard(el,at){
+  cards.forEach(other=>{if(other!==el)tl.set(other,{opacity:0},at);});
+  tl.fromTo(el,{opacity:0,y:26,letterSpacing:'0.42em'},{opacity:1,y:0,letterSpacing:'0.16em',duration:.85,ease:'power2.out',immediateRender:false},at);
+}
+window.__umpPlay=(frame)=>{
+  const t=frameAt(frame);
+  tl.seek(t,false);
+  const total=Number(S.dataset.duration)||10;
+  const scale=1+0.04*Math.min(t/total,1);
+  gsap.set(S,{scale:scale,transformOrigin:'50% 44%'});
+};
+if(window.HyperFrames&&HyperFrames.setFrame){HyperFrames.setFrame(window.__umpPlay);}
+window.__umpSeek=(frame)=>tl.seek(frameAt(frame),false);
+ep.cues.forEach((c,i)=>{const card=cards.find(x=>x.dataset.beat===c.beat);if(!card)return;tl.call(()=>showCard(card,frameAt(c.visual_frame)),null,frameAt(c.visual_frame));});
+window.__timelines={root:tl};
+window.__UMP_READY__=true;
+</script></body></html>

@@ -1,0 +1,192 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1080,height=1920"><title>UMP Synthwave</title><script src="assets/gsap.min.js"></script><style>
+:root{
+  --ground:#0A0320;--ink:#F3E9FF;--accent:#FF2D95;--secondary:#22D3EE;
+  --sun_top:#FFE066;--sun_mid:#FF9F1C;--sun_bottom:#FF2D95;
+  --horizon:1180px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
+#stage{position:relative;width:1080px;height:1920px;overflow:hidden;background:var(--ground);
+  font-family:"Inter","Helvetica Neue",Arial,sans-serif}
+
+/* ---------- sky ---------- */
+#sky{position:absolute;left:0;right:0;top:0;height:var(--horizon);
+  background:linear-gradient(180deg,#12002E 0%,#2A0A4F 42%,#5A1270 78%,#8A1B7A 100%)}
+#stars{position:absolute;inset:0;opacity:.85}
+
+/* ---------- sun: smooth gradient, then horizontal bands cut out ---------- */
+#sunWrap{position:absolute;left:290px;top:560px;width:500px;height:500px;will-change:transform}
+#sun{position:absolute;inset:0;border-radius:50%;
+  background:linear-gradient(180deg,var(--sun_top) 0%,var(--sun_mid) 48%,var(--sun_bottom) 100%);
+  -webkit-mask-image:repeating-linear-gradient(180deg,#000 0 34px,transparent 34px 44px);mask-mode:alpha;-webkit-mask-mode:alpha;
+  mask-image:repeating-linear-gradient(180deg,#000 0 34px,transparent 34px 44px);mask-mode:alpha;
+  filter:drop-shadow(0 0 24px rgba(255,45,149,.85))}
+#sunGlow{position:absolute;left:170px;top:440px;width:740px;height:740px;border-radius:50%;
+  background:radial-gradient(circle,rgba(255,110,60,.28) 0%,rgba(255,45,149,.16) 42%,transparent 72%)}
+
+/* ---------- mountains behind the horizon ---------- */
+#mountains{position:absolute;left:0;right:0;top:calc(var(--horizon) - 210px);height:220px;width:100%}
+
+/* ---------- floor grid: rotateX inside a perspective box ---------- */
+#floor{position:absolute;left:0;right:0;top:var(--horizon);bottom:0;overflow:hidden;
+  perspective:520px;perspective-origin:50% 0%}
+/* Two layers on purpose: #tilt holds the plane, #grid scrolls inside it.
+   Sharing one element lets the scroll transform overwrite rotateX. */
+#tilt{position:absolute;left:-900px;right:-900px;top:0;height:3400px;transform-origin:50% 0%;
+  transform:rotateX(74deg)}
+#grid{position:absolute;inset:0;will-change:transform;
+  background-image:
+    repeating-linear-gradient(90deg,rgba(255,45,149,.95) 0px,rgba(255,45,149,.95) 3px,transparent 3px,transparent 140px),
+    repeating-linear-gradient(180deg,rgba(255,45,149,.95) 0px,rgba(255,45,149,.95) 3px,transparent 3px,transparent 140px);
+  background-size:140px 140px;
+  background-repeat:repeat}
+#horizonGlow{position:absolute;left:0;right:0;top:calc(var(--horizon) - 70px);height:150px;
+  background:radial-gradient(ellipse at 50% 100%,rgba(255,45,149,.55) 0%,rgba(120,0,160,.22) 44%,transparent 74%)}
+#floorFade{position:absolute;left:0;right:0;top:var(--horizon);bottom:0;
+  background:linear-gradient(180deg,var(--ground) 0%,rgba(10,3,32,.30) 16%,transparent 46%)}
+
+/* ---------- chrome title: gradient fill + tight and wide bloom ---------- */
+#title{position:absolute;left:0;right:0;top:236px;text-align:center;z-index:6}
+#title b{display:inline-block;font:900 168px/0.92 "Inter","Arial Black",sans-serif;letter-spacing:-.045em;
+  background:linear-gradient(180deg,#FFFFFF 0%,#CFE9FF 24%,#3A5FD0 47%,#8F7BFF 53%,#FFFFFF 72%,#9FB4D8 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 0 4px rgba(140,225,255,.95)) drop-shadow(0 0 30px rgba(120,0,255,.80))}
+#title i{display:block;margin-top:18px;font:700 34px/1 "Inter",sans-serif;font-style:normal;
+  letter-spacing:.52em;color:var(--secondary);text-transform:uppercase}
+
+/* ---------- beat card ---------- */
+#beat{position:absolute;left:84px;right:84px;bottom:250px;z-index:8;opacity:0;
+  background:rgba(10,3,32,.90);border:2px solid rgba(255,45,149,.55);border-radius:28px;
+  padding:34px 38px;box-shadow:0 0 26px rgba(255,45,149,.30)}
+#beat .tag{display:inline-block;font:700 26px/1 "Inter",sans-serif;letter-spacing:.26em;
+  color:var(--secondary);text-transform:uppercase}
+#beat h1{margin-top:20px;font:900 84px/1.02 "Inter",sans-serif;color:var(--ink);letter-spacing:-.03em}
+#beat h1 span{color:var(--accent)}
+#beat p{margin-top:18px;font:400 40px/1.42 "Inter",sans-serif;color:rgba(243,233,255,.84)}
+
+/* ---------- neon script word ---------- */
+#script{position:absolute;left:0;right:0;bottom:600px;text-align:center;z-index:7;opacity:0;
+  font:italic 400 104px/1 "Georgia",serif;color:#FFB3E1;
+  text-shadow:0 0 6px #FF2D95,0 0 18px #FF2D95,0 0 44px #B0006E}
+
+/* ---------- VHS: static scanlines + chroma split, fixed for determinism ---------- */
+#scan{position:absolute;inset:0;z-index:9;pointer-events:none;
+  background:repeating-linear-gradient(180deg,rgba(0,0,0,.20) 0 2px,transparent 2px 5px);mix-blend-mode:multiply}
+#vignette{position:absolute;inset:0;z-index:4;pointer-events:none;
+  background:radial-gradient(ellipse at 50% 50%,transparent 54%,rgba(4,0,14,.72) 100%)}
+</style></head><body data-composition-id="root" data-width="1080" data-height="1920" data-fps="30" data-duration="__UMP_DURATION__">
+<div id="cards" style="display:none">__UMP_CARDS__</div>
+<div id="stage">
+  <div id="sky">
+    <svg id="stars" viewBox="0 0 1080 1180" preserveAspectRatio="none"></svg>
+    <div id="sunGlow"></div>
+    <div id="sunWrap"><div id="sun"></div></div>
+    <svg id="mountains" viewBox="0 0 1080 220" preserveAspectRatio="none">
+      <path fill="#150327" d="M0,220 L0,150 L120,86 L215,150 L320,60 L430,150 L540,92 L650,158 L760,72 L880,150 L980,104 L1080,160 L1080,220 Z"/>
+      <path fill="none" stroke="#FF2D95" stroke-width="2.5" opacity=".9"
+        d="M0,150 L120,86 L215,150 L320,60 L430,150 L540,92 L650,158 L760,72 L880,150 L980,104 L1080,160"/>
+    </svg>
+  </div>
+  <div id="horizonGlow"></div>
+  <div id="floor"><div id="tilt"><div id="grid"></div></div></div>
+  <div id="floorFade"></div>
+  <div id="title"><b>NEON</b><i>ump · 1986</i></div>
+  <div id="script"></div>
+  <div id="beat"><div class="tag"></div><h1></h1><p></p></div>
+  <div id="scan"></div>
+  <div id="vignette"></div>
+</div>
+<script>
+const EP = __UMP_EPISODE__;
+const DURATION = __UMP_DURATION__;
+
+/* Cards arrive as markup in #cards; read them from the DOM, not as JSON. */
+const CARDS_NODES = Array.prototype.slice.call(document.querySelectorAll('#cards .beat'));
+const CARDS_DATA = CARDS_NODES.map(function(el){
+  return {
+    tag: (el.querySelector('.label') || {}).textContent || '',
+    headline: (el.querySelector('h2') || {}).textContent || '',
+    body: (el.querySelector('p') || {}).textContent || ''
+  };
+});
+
+/* Starfield is seeded from index, not Math.random, so a re-render is identical. */
+const stars = document.getElementById('stars');
+for(let i=0;i<130;i++){
+  const c = document.createElementNS('http://www.w3.org/2000/svg','circle');
+  const sx = (i * 137.508) % 1080;
+  const sy = (i * 91.7) % 980;
+  const r  = 0.7 + ((i * 7919) % 3) * 0.6;
+  c.setAttribute('cx', sx.toFixed(2));
+  c.setAttribute('cy', sy.toFixed(2));
+  c.setAttribute('r', r.toFixed(2));
+  c.setAttribute('fill', i % 9 === 0 ? '#22D3EE' : '#F3E9FF');
+  c.setAttribute('opacity', (0.30 + ((i * 31) % 60) / 100).toFixed(2));
+  stars.appendChild(c);
+}
+
+const GRID_TILE = 140;   /* must match background-size in #grid */
+const grid = document.getElementById('grid');
+const tl = gsap.timeline({paused:true});
+
+/* Low flight over the floor: the plane rushes toward the camera.
+   Only transform is animated — background-position snaps to integer pixels. */
+/* translate-only: y in whole tiles over 1.6 s, looping seamlessly */
+tl.fromTo(grid,{y:0},{y:GRID_TILE,duration:1.6,repeat:Math.ceil(DURATION/1.6),ease:'none'},0);
+
+/* Sun rises out of the horizon over the first beats. */
+tl.fromTo('#sunWrap',{y:230,scale:0.86,opacity:0},
+  {y:0,scale:1,opacity:1,duration:2.2,ease:'power2.out'},0);
+tl.fromTo('#sunGlow',{opacity:0,y:180},{opacity:1,y:0,duration:2.4,ease:'power2.out'},0);
+tl.fromTo('#horizonGlow',{opacity:0},{opacity:1,duration:1.6,ease:'power2.out'},0.3);
+tl.fromTo('#mountains',{opacity:0,y:40},{opacity:1,y:0,duration:1.4,ease:'power2.out'},0.2);
+
+/* Title slams in with the double glow already on the element. */
+tl.fromTo('#title b',{opacity:0,scale:2.6,filter:'blur(18px)'},
+  {opacity:1,scale:1,filter:'blur(0px)',duration:0.42,ease:'power4.out'},0.55);
+tl.fromTo('#title i',{opacity:0,y:10,scale:1.12},{opacity:1,y:0,scale:1,duration:0.7,ease:'power2.out'},0.85);
+
+/* Breathing bloom on the title, still a pure function of t. */
+tl.to('#title b',{scale:1.02,duration:1.6,repeat:8,yoyo:true,ease:'sine.inOut'},1.1);
+
+const BEAT_LEN = Math.max(2.0, (DURATION - 2.4) / Math.max(1, CARDS_DATA.length));
+CARDS_DATA.forEach(function(card,i){
+  const start = 1.5 + i * BEAT_LEN;
+  if(start > DURATION - 0.8) return;
+  const tagEl = document.querySelector('#beat .tag');
+  const hEl   = document.querySelector('#beat h1');
+  const pEl   = document.querySelector('#beat p');
+  tl.call(function(){
+    tagEl.textContent = card.tag || ('B ' + String(i+1).padStart(3,'0'));
+    hEl.textContent = '';
+    const words = String(card.headline || '').split(' ');
+    words.forEach(function(w,wi){
+      if(wi === words.length - 1 && words.length > 1){
+        const s = document.createElement('span');
+        s.textContent = w;
+        hEl.appendChild(s);
+        hEl.appendChild(document.createTextNode(' '));
+      }else{
+        hEl.appendChild(document.createTextNode(w + ' '));
+      }
+    });
+    pEl.textContent = card.body || '';
+  },null,start);
+  tl.fromTo('#beat',{opacity:0,y:30},{opacity:1,y:0,duration:0.34,ease:'power3.out'},start);
+  tl.to('#beat',{opacity:0,y:-22,duration:0.26,ease:'power2.in'},start + BEAT_LEN - 0.30);
+});
+
+/* Neon script word writes on, flickers once, then holds. */
+const SCRIPT_AT = DURATION - 3.2;
+tl.call(function(){
+  document.getElementById('script').textContent = 'midnight';
+},null,SCRIPT_AT);
+tl.fromTo('#script',{opacity:0},{opacity:1,duration:0.18,ease:'steps(1)'},SCRIPT_AT);
+tl.to('#script',{opacity:0.25,duration:0.06,ease:'steps(1)'},SCRIPT_AT + 0.18);
+tl.to('#script',{opacity:1,duration:0.06,ease:'steps(1)'},SCRIPT_AT + 0.30);
+tl.set('#beat',{opacity:0},DURATION);
+
+window.__timelines={root:tl};
+window.__UMP_READY__=true;
+</script>
+</body></html>

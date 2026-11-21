@@ -48,13 +48,31 @@ Hanya **Bang Motion** yang saat ini disalin ke dalam repo (`vendor/bang-motion/`
 - **Peran:** checklist koreografi per shot — primary/secondary/ambient, easing, stagger. Tanpa Creator MCP.
 - **Status:** checkout riset terpisah dari UMP, belum disalin. Polanya diadaptasi ulang, bukan file upstream.
 
-## 4. MG Styles 15 — tidak di-vendor
+## 4. MG Styles 15 — tidak di-vendor, dua belas style diadopsi ulang
 
 - **Sumber:** https://github.com/Vincentwei1021/mg-styles-15
 - **Commit:** `8fab7eb`
 - **Lisensi:** MIT untuk materi yang diliput `LICENSE` pada commit pinned. Hak aset pihak ketiga belum diverifikasi per file.
-- **Peran:** kartu gaya flat vector/kolase + pola cue bersama (satu cue menggerakkan aksi dan SFX serentak).
-- **Status:** repo riset Git terfilter, media tidak diambil. Polanya diadaptasi ulang, tidak ada file upstream di repo ini.
+- **Peran:** kartu gaya + pola cue bersama (satu cue menggerakkan aksi dan SFX serentak). Lima belas style tersedia di `prompts/`; dua belas diadopsi, dua ditunda (lihat `docs/research/ump/expensive-styles.md`).
+- **Status:** repo riset Git terfilter, media tidak diambil.
+- **Style yang diadopsi sebagai preset UMP:**
+
+  | Preset UMP | Upstream | Yang diambil | Yang tidak diambil |
+  |---|---|---|---|
+  | `styles/line-art/` | `prompts/02-line-art.md` | aturan visual, palet, aturan stroke-dashoffset, urutan ease | `demos/02-line-art/*` (HTML, `film.js`, `cues.json`, `audio.py`) |
+  | `styles/bauhaus/` | `prompts/09-bauhaus.md` | grid modular, palet primer, aturan rotasi, easing tanpa overshoot | `demos/09-bauhaus/*` |
+  | `styles/cyber-hud/` | `prompts/22-hud.md` | lapisan FUI, palet cyan/oranye, pola radar, lock bracket, typewriter | `demos/22-hud/*`, engine Three.js |
+  | `styles/flat-vector/` | `prompts/01-flat-vector.md` | tanpa gradien, squash 10%, stagger, shape wipe | `demos/01-flat-vector/*` |
+  | `styles/cel-boil/` | `prompts/05-cel-boil.md` | on-twos, boil via displacement, smear, grain | `demos/05-cel-boil/*`, brush renderer |
+  | `styles/collage/` | `prompts/06-collage.md` | grid 12 fps, jitter 2 px, tepi potong, halftone | `demos/06-collage/*`, foto raster |
+  | `styles/liquid/` | `prompts/07-liquid.md` | metaball blur+threshold, waveFront, drip | `demos/07-liquid/*`, shader WebGL |
+  | `styles/morph/` | `prompts/08-morph.md` | vertex sejajar, bridge, bidang warna | `demos/08-morph/*`, flubber |
+  | `styles/aurora-glass/` | `prompts/12-aurora-glass.md` | blob blur, kartu backdrop-filter, grain | `demos/12-aurora-glass/*`, shader WebGL |
+  | `styles/paperclip/` | `prompts/19-paperclip.md` | kanvas raksasa, kartu stiker, grafik presisi | `demos/19-paperclip/*`, foto bertopeng |
+  | `styles/pixel/` | `prompts/20-pixel.md` | kanvas 180x320, nearest-neighbour, dither | `demos/20-pixel/*`, sprite sheet Aseprite |
+  | `styles/synthwave/` | `prompts/10-synthwave.md` | grid perspektif CSS, matahari berbanding, krom, scanline | `demos/10-synthwave/*`, renderer WebGL, canvas chrome, pass VHS bergoyang |
+
+  Komposisi UMP ditulis ulang untuk kanvas 1080×1920 dengan kontrak token `__UMP_*__` milik UMP. Tidak ada kode atau aset upstream yang disalin; yang ditransfer adalah aturan gaya (palet, easing, larangan, checklist) dari file prompt.
 
 ## 5. Huashu Art Motion — tidak di-vendor
 
