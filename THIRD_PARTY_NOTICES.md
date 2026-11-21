@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Repo ini berlisensi MIT (lihat [LICENSE](LICENSE)). Kode dan bahan yang diambil dari sumber luar tetap mengikuti lisensi masing-masing. Commit yang dicatat di bawah adalah commit yang diaudit pada 2026-11-21.
+Repo ini berlisensi MIT (lihat [LICENSE](LICENSE)). Kode dan bahan yang diambil dari sumber luar tetap mengikuti lisensi masing-masing. Commit di bawah diperiksa pada audit T1; lihat [laporan per sumber](docs/research/ump/README.md).
 
 Hanya **Bang Motion** yang saat ini disalin ke dalam repo (`vendor/bang-motion/`). Lima sumber lain tercatat di sini karena memberi pola kerja yang diadaptasi, tetapi **tidak** di-vendor dan tidak menjadi dependency — lihat [ROADMAP.md](ROADMAP.md) bagian E.
 
@@ -9,9 +9,9 @@ Hanya **Bang Motion** yang saat ini disalin ke dalam repo (`vendor/bang-motion/`
 - Bang Motion — `c1aa65e` — MIT, © 2026 Bang Tutorial — **di-vendor**
 - Reanimate — `3f7a55a` — MIT — tidak di-vendor
 - LottieFiles motion-design-skill — `d77a9fc` — MIT — tidak di-vendor
-- MG Styles 15 — `8fab7eb` — lisensi tidak tercantum — tidak di-vendor
+- MG Styles 15 — `8fab7eb` — MIT (lisensi root; hak aset pihak ketiga belum diverifikasi) — tidak di-vendor
 - Huashu Art Motion — `a97c450` — MIT — tidak di-vendor
-- Anidoodle — `4ae27d2` — lisensi tidak tercantum — tidak di-vendor
+- Anidoodle — `4ae27d2` — Apache-2.0 (software orisinal; aset berlisensi terpisah) — tidak di-vendor
 
 ## 1. Bang Motion — di-vendor
 
@@ -38,7 +38,7 @@ Hanya **Bang Motion** yang saat ini disalin ke dalam repo (`vendor/bang-motion/`
 - **Commit:** `3f7a55a`
 - **Lisensi:** MIT
 - **Peran:** bedah animasi frame-by-frame untuk mode referensi (ROADMAP C2, masih menunggu keputusan).
-- **Status:** belum dikloning, belum disalin. Tidak ada kode Reanimate di repo ini.
+- **Status:** checkout riset terpisah dari UMP, belum disalin. Tidak ada kode Reanimate di repo ini.
 
 ## 3. LottieFiles motion-design-skill — tidak di-vendor
 
@@ -46,15 +46,15 @@ Hanya **Bang Motion** yang saat ini disalin ke dalam repo (`vendor/bang-motion/`
 - **Commit:** `d77a9fc`
 - **Lisensi:** MIT
 - **Peran:** checklist koreografi per shot — primary/secondary/ambient, easing, stagger. Tanpa Creator MCP.
-- **Status:** belum dikloning, belum disalin. Polanya diadaptasi ulang, bukan file upstream.
+- **Status:** checkout riset terpisah dari UMP, belum disalin. Polanya diadaptasi ulang, bukan file upstream.
 
 ## 4. MG Styles 15 — tidak di-vendor
 
 - **Sumber:** https://github.com/Vincentwei1021/mg-styles-15
 - **Commit:** `8fab7eb`
-- **Lisensi:** **tidak tercantum** di repo upstream saat audit. Jangan salin file upstream sebelum lisensinya dipastikan; hubungi pemilik repo bila perlu.
+- **Lisensi:** MIT untuk materi yang diliput `LICENSE` pada commit pinned. Hak aset pihak ketiga belum diverifikasi per file.
 - **Peran:** kartu gaya flat vector/kolase + pola cue bersama (satu cue menggerakkan aksi dan SFX serentak).
-- **Status:** belum dikloning (ukuran ±568 MB). Polanya diadaptasi ulang, tidak ada file upstream di repo ini.
+- **Status:** repo riset Git terfilter, media tidak diambil. Polanya diadaptasi ulang, tidak ada file upstream di repo ini.
 
 ## 5. Huashu Art Motion — tidak di-vendor
 
@@ -62,15 +62,15 @@ Hanya **Bang Motion** yang saat ini disalin ke dalam repo (`vendor/bang-motion/`
 - **Commit:** `a97c450`
 - **Lisensi:** MIT
 - **Peran:** setujui style frame dulu, lalu petakan beat VO ke aksi visual. Engine dan konfigurasi suaranya tidak diadopsi.
-- **Status:** belum dikloning (±78 MB). Tidak ada file upstream di repo ini.
+- **Status:** repo riset Git terfilter. Tidak ada file upstream di repo ini.
 
 ## 6. Anidoodle — tidak di-vendor
 
 - **Sumber:** https://github.com/alexgreensh/anidoodle
 - **Commit:** `4ae27d2`
-- **Lisensi:** **tidak tercantum** di repo upstream saat audit. Jangan salin file upstream sebelum lisensinya dipastikan.
+- **Lisensi:** Apache-2.0 untuk software orisinal. Aset/dependensi punya ketentuan terpisah; lihat laporan Anidoodle.
 - **Peran:** ilustrasi procedural deterministik (parameter + seed tetap). Engine penuh tidak diadopsi di v1.
-- **Status:** belum dikloning (±49 MB). Tidak ada file upstream di repo ini.
+- **Status:** repo riset Git terfilter. Tidak ada file upstream di repo ini.
 
 ## Sumber proses non-kode
 
