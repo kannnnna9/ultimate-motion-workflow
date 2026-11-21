@@ -1,0 +1,12 @@
+{
+  "id": "kinetic-bold",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": ["assets/gsap.min.js"],
+  "palette": {"ground": "#0B0B0B", "ink": "#FAF7F0", "accent": "#FFE500"},
+  "typography": {"display": "DejaVu Sans", "body": "DejaVu Sans Mono"},
+  "layout": {"kind": "diagonal-stack", "x": 190, "top": 500, "safe_area": {"x": 150, "y": 300, "width": 780, "height": 1050}},
+  "motion": {"camera": "motivated-punch-in", "primary": {"ease": "power4.out", "offset_ms": 0}, "secondary": {"stagger_ms": 90}, "ambient": {"kind": "slab-slide", "amplitude": 0.08}},
+  "caption_safe_area": {"x": 150, "y": 1450, "width": 780, "height": 250},
+  "sources": [{"name": "UMP motion research", "url": "docs/research/ump/lottiefiles.md"}]
+}

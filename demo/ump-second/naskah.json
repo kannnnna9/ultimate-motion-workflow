@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "episode": "ump-second",
+  "language": "id",
+  "voice": {"engine": "external", "name": "id-ID-ArdiNeural", "rate": "+0%"},
+  "target_duration_s": {"min": 16, "max": 24},
+  "beats": [
+    {"id": "b001", "narration": "Dari Blok M, kita bergeser ke Cakra Selaras Wahana, atau Ce Es We.", "on_screen_text": "CSW", "purpose": "hook", "fact_refs": ["s1"], "estimated_s": 5.487},
+    {"id": "b002", "narration": "Pada dua ribu dua puluh dua, Transjakarta mengintegrasikan rute Ragunan lewat Kemang ke simpul ini, dengan pemberhentian di Halte Kejaksaan Agung.", "on_screen_text": "KEJAKSAAN AGUNG", "purpose": "konteks", "fact_refs": ["s2"], "estimated_s": 8.425},
+    {"id": "b003", "narration": "Di kawasan yang sama, ada Stasiun MRT ASEAN.", "on_screen_text": "MRT ASEAN", "purpose": "payoff", "fact_refs": ["s1", "s3"], "estimated_s": 5.3}
+  ],
+  "sources": [
+    {"id": "s1", "title": "Halte Integrasi Cakra Selaras Wahana", "publisher": "Transjakarta", "url": "https://transjakarta.co.id/berita/halte-integrasi-csw-transjakarta-raih-gold-winner-kategori-infrastruktur-di-fiabci-indonesiarei-excellence-award-2025-mewakili-indonesia-ke-ajang-dunia-fiabci-world-prix-dexcellence-awards-2026", "accessed": "2026-11-21"},
+    {"id": "s2", "title": "Integrasi rute Ragunan–Blok M via Kemang (4 April 2022)", "publisher": "ANTARA", "url": "https://www.antaranews.com/berita/2801233/transjakarta-integrasikan-rute-ragunan-blok-m-via-kemang-ke-csw", "accessed": "2026-11-21"},
+    {"id": "s3", "title": "Stasiun ASEAN", "publisher": "MRT Jakarta", "url": "https://jakartamrt.co.id/layanan-pelanggan/stasiun/stasiun-asean", "accessed": "2026-11-21"}
+  ]
+}

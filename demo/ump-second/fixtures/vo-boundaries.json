@@ -1,0 +1,232 @@
+{
+  "words": [
+    {
+      "text": "Dari",
+      "start_ms": 112,
+      "end_ms": 350
+    },
+    {
+      "text": "Blok",
+      "start_ms": 350,
+      "end_ms": 575
+    },
+    {
+      "text": "M",
+      "start_ms": 575,
+      "end_ms": 937
+    },
+    {
+      "text": "kita",
+      "start_ms": 1212,
+      "end_ms": 1425
+    },
+    {
+      "text": "bergeser",
+      "start_ms": 1425,
+      "end_ms": 1862
+    },
+    {
+      "text": "ke",
+      "start_ms": 1862,
+      "end_ms": 1937
+    },
+    {
+      "text": "Cakra",
+      "start_ms": 1937,
+      "end_ms": 2212
+    },
+    {
+      "text": "Selaras",
+      "start_ms": 2212,
+      "end_ms": 2575
+    },
+    {
+      "text": "Wahana",
+      "start_ms": 2575,
+      "end_ms": 3137
+    },
+    {
+      "text": "atau",
+      "start_ms": 3387,
+      "end_ms": 3800
+    },
+    {
+      "text": "Ce",
+      "start_ms": 3800,
+      "end_ms": 4037
+    },
+    {
+      "text": "Es",
+      "start_ms": 4037,
+      "end_ms": 4287
+    },
+    {
+      "text": "We",
+      "start_ms": 4287,
+      "end_ms": 4637
+    },
+    {
+      "text": "Pada",
+      "start_ms": 5487,
+      "end_ms": 5725
+    },
+    {
+      "text": "dua",
+      "start_ms": 5725,
+      "end_ms": 5862
+    },
+    {
+      "text": "ribu",
+      "start_ms": 5862,
+      "end_ms": 6037
+    },
+    {
+      "text": "dua",
+      "start_ms": 6037,
+      "end_ms": 6175
+    },
+    {
+      "text": "puluh",
+      "start_ms": 6175,
+      "end_ms": 6362
+    },
+    {
+      "text": "dua",
+      "start_ms": 6362,
+      "end_ms": 6825
+    },
+    {
+      "text": "Transjakarta",
+      "start_ms": 7137,
+      "end_ms": 7850
+    },
+    {
+      "text": "mengintegrasikan",
+      "start_ms": 7850,
+      "end_ms": 8587
+    },
+    {
+      "text": "rute",
+      "start_ms": 8587,
+      "end_ms": 8787
+    },
+    {
+      "text": "Ragunan",
+      "start_ms": 8787,
+      "end_ms": 9212
+    },
+    {
+      "text": "lewat",
+      "start_ms": 9212,
+      "end_ms": 9475
+    },
+    {
+      "text": "Kemang",
+      "start_ms": 9475,
+      "end_ms": 9737
+    },
+    {
+      "text": "ke",
+      "start_ms": 9737,
+      "end_ms": 9812
+    },
+    {
+      "text": "simpul",
+      "start_ms": 9812,
+      "end_ms": 10087
+    },
+    {
+      "text": "ini",
+      "start_ms": 10087,
+      "end_ms": 10512
+    },
+    {
+      "text": "dengan",
+      "start_ms": 10775,
+      "end_ms": 11050
+    },
+    {
+      "text": "pemberhentian",
+      "start_ms": 11050,
+      "end_ms": 11662
+    },
+    {
+      "text": "di",
+      "start_ms": 11662,
+      "end_ms": 11750
+    },
+    {
+      "text": "Halte",
+      "start_ms": 11750,
+      "end_ms": 12037
+    },
+    {
+      "text": "Kejaksaan",
+      "start_ms": 12037,
+      "end_ms": 12550
+    },
+    {
+      "text": "Agung",
+      "start_ms": 12550,
+      "end_ms": 13075
+    },
+    {
+      "text": "Di",
+      "start_ms": 13912,
+      "end_ms": 14075
+    },
+    {
+      "text": "kawasan",
+      "start_ms": 14075,
+      "end_ms": 14437
+    },
+    {
+      "text": "yang",
+      "start_ms": 14437,
+      "end_ms": 14562
+    },
+    {
+      "text": "sama",
+      "start_ms": 14562,
+      "end_ms": 15125
+    },
+    {
+      "text": "ada",
+      "start_ms": 15437,
+      "end_ms": 15662
+    },
+    {
+      "text": "Stasiun",
+      "start_ms": 15662,
+      "end_ms": 16137
+    },
+    {
+      "text": "MRT",
+      "start_ms": 16137,
+      "end_ms": 16500
+    },
+    {
+      "text": "ASEAN.",
+      "start_ms": 16500,
+      "end_ms": 17112
+    }
+  ],
+  "boundaries": [
+    {
+      "beat": "b001",
+      "start_ms": 112,
+      "word_index": 0
+    },
+    {
+      "beat": "b002",
+      "start_ms": 5487,
+      "word_index": 13
+    },
+    {
+      "beat": "b003",
+      "start_ms": 13912,
+      "word_index": 34
+    }
+  ],
+  "duration_ms": 17952
+}

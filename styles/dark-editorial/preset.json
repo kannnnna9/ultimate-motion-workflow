@@ -1,0 +1,12 @@
+{
+  "id": "dark-editorial",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": ["assets/gsap.min.js"],
+  "palette": {"ground": "#101A22", "ink": "#F2EFE6", "accent": "#FF7A45"},
+  "typography": {"display": "DejaVu Sans", "body": "DejaVu Sans Mono"},
+  "layout": {"kind": "editorial-column", "x": 120, "top": 390, "safe_area": {"x": 110, "y": 330, "width": 860, "height": 940}},
+  "motion": {"camera": "subject-follow", "primary": {"ease": "power3.out", "offset_ms": 0}, "secondary": {"stagger_ms": 120}, "ambient": {"kind": "rail-drift", "amplitude": 0.04}},
+  "caption_safe_area": {"x": 110, "y": 1420, "width": 860, "height": 280},
+  "sources": [{"name": "UMP motion research", "url": "docs/research/ump/bang-motion.md"}]
+}

@@ -6,6 +6,8 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 
 ### Added
 
+- **Acceptance gate dan cleanup audit** — `minimal-explainer`, `scripts/verify_ump.py`, `tests/test_acceptance.py`, `scripts/cleanup_research.py`, `tests/test_cleanup.py`, serta bukti render dan manifest riset di `docs/verification/`.
+
 - **Style `kinetic-bold` naik ke `ready`** — komposisi `styles/kinetic-bold/index.html` (blok warna, kinetic typography, cut tajam), preview di `styles/kinetic-bold/preview/`, sudah lolos `hyperframes check` 0 error dan dirender 1080×1920 30 fps.
 - **`render.py` memilih komposisi dari `style_id`** — tanpa `--project`, komposisi diambil dari `styles/registry.json`. Style berstatus `spec` ditolak dengan pesan jelas.
 
@@ -23,7 +25,7 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 - **`scripts/`** — `setup`, `check`, `caption` (VO + caption per kata), `subs` (ASS), dan `render` (HyperFrames → caption terbakar + audio → verifikasi ffprobe). HyperFrames dipatok `0.9.72`.
 - **Demo explainer 9:16** — `demo/explain-9x16/` (data episode) dan `demo/hyperframes/` (komposisi). Tiga beat, VO Edge TTS, caption sinkron, kartu sumber. MP4 1080×1920 30 fps H.264/AAC terukur lewat `ffprobe`.
 +- **Portability verifier** — `scripts/verify_portability.py` menguji archive `HEAD` sebagai clean clone; `--render` menjalankan render master dari clone tersebut.
-- **Style registry** — `styles/registry.json` mencatat preset `dark-editorial` (ready) serta `botanical-paper`, `kinetic-bold`, dan `minimal-explainer` (spec). Detail aturan tiap preset ada di `styles/<id>/STYLE.md`; brand sheet memilihnya lewat `style_id`.
+- **Style registry** — `styles/registry.json` mencatat preset `dark-editorial`, `kinetic-bold`, dan `minimal-explainer` (ready), serta `botanical-paper` (spec). Detail aturan tiap preset ada di `styles/<id>/STYLE.md`; brand sheet memilihnya lewat `style_id`.
 - **`skills/motion-pipeline/SKILL.md`** — alur Hermes dari pilih style → brand sheet → naskah → VO/caption → cue → preview → render → review.
 
 ### Changed

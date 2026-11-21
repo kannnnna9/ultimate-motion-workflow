@@ -1,0 +1,54 @@
+{
+  "id": "minimal-explainer",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#F4F0E8",
+    "ink": "#18212B",
+    "accent": "#2D7A78"
+  },
+  "typography": {
+    "display": "DejaVu Sans",
+    "body": "DejaVu Sans Mono"
+  },
+  "layout": {
+    "kind": "diagram-column",
+    "x": 120,
+    "top": 390,
+    "safe_area": {
+      "x": 110,
+      "y": 330,
+      "width": 860,
+      "height": 940
+    }
+  },
+  "motion": {
+    "camera": "diagram-follow",
+    "primary": {
+      "ease": "power2.out",
+      "offset_ms": 0
+    },
+    "secondary": {
+      "stagger_ms": 180
+    },
+    "ambient": {
+      "kind": "line-drift",
+      "amplitude": 0.02
+    }
+  },
+  "caption_safe_area": {
+    "x": 110,
+    "y": 1420,
+    "width": 860,
+    "height": 280
+  },
+  "sources": [
+    {
+      "name": "UMP motion research",
+      "url": "docs/research/ump/bang-motion.md"
+    }
+  ]
+}

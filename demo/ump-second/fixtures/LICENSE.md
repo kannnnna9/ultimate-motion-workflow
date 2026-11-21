@@ -1,0 +1,8 @@
+# CSW demo fixture provenance
+
+- `naskah.json` is original Indonesian copy and lists factual sources. The Kejaksaan Agung statement is historical (2022); the episode does not specify current service, a fare, or a walking path.
+- `assets/illustration.svg` is an original schematic under the repository MIT license, not an official map or logo. Recreate it with `ump_core.illustration.draw_svg` using `c003.action.params.illustration` in `cue.json`. A preset must explicitly display the SVG; copying it into staging or forwarding the cue field in JSON does not display it.
+- `assets/audio/cue-accent.wav` is an original 660 Hz sine accent under the repository MIT license. Recreate with `ffmpeg -f lavfi -i 'sine=frequency=660:sample_rate=48000:duration=0.24' -af 'afade=t=in:d=0.006,afade=t=out:st=0.03:d=0.21,volume=0.75' -c:a pcm_s16le assets/audio/cue-accent.wav`. Cue `c003` declares a one-frame offset; metadata alone does not prove mixer use.
+- `assets/audio/vo.mp3` was synthesized from the three beats joined with spaces, via `edge-tts` 7.3.1, Microsoft's `id-ID-ArdiNeural`, default rate, `WordBoundary` mode. `fixtures/vo-boundaries.json` comes from the returned 100 ns timestamps converted to milliseconds; beat starts point to the first word of each beat. `duration_ms` is the FFprobe duration including encoder padding. The client license does not establish redistribution rights for provider-generated audio; verify provider terms before distributing this local fixture.
+
+For offline use with the legacy CLI, copy `fixtures/vo-boundaries.json` into `work/captions.json` in a scratch copy of the episode, then run `scripts/subs.py` against that copy. Keep the episode folder name `ump-second` for validation.

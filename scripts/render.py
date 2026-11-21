@@ -96,6 +96,31 @@ def validate_output(info: dict, brand: dict) -> list[str]:
     return problems
 
 
+def build_mux_command(frames: Path, vo: Path, ass: Path, final: Path, *, preview: bool, video_duration: float, bed: Path | None = None) -> list[str]:
+    audio_inputs = ["-i", str(vo)]
+    video_filter = f"[0:v]ass={ass.as_posix()}"
+    if preview:
+        video_filter += ",scale=540:960"
+    filter_parts = [f"{video_filter}[v0]"]
+    pad = f"apad=whole_dur={video_duration:.3f}"
+    if bed and bed.exists():
+        audio_inputs += ["-i", str(bed)]
+        filter_parts.append(f"[1:a]volume=1.0,{pad}[vo]")
+        filter_parts.append("[2:a]volume=0.12[bed]")
+        filter_parts.append("[vo][bed]amix=inputs=2:duration=first:dropout_transition=0[aout]")
+    else:
+        filter_parts.append(f"[1:a]{pad}[aout]")
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+           "-i", str(frames), *audio_inputs,
+           "-filter_complex", ";".join(filter_parts),
+           "-map", "[v0]", "-map", "[aout]",
+           "-c:v", "libx264", "-preset", "medium", "-crf", "23" if preview else "18",
+           "-pix_fmt", "yuv420p", "-r", "30",
+           "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+           "-movflags", "+faststart", str(final)]
+    return cmd
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("episode", type=Path)
@@ -157,37 +182,14 @@ def main(argv: list[str]) -> int:
     if not vo.exists():
         sys.exit(f"{vo} tidak ada — jalankan scripts/caption.py dulu")
 
-    audio_inputs = ["-i", str(vo)]
-    filter_parts = [f"[0:v]ass={ass.as_posix()}[v0]"]
     bed = ep / "assets/audio/bed.mp3"
     # apad dibatasi ke durasi `d`: apad TANPA argumen mengisi audio tanpa batas,
     # dan bersama -shortest ffmpeg menulis sampai disk penuh ("No space left on
     # device"). Nilai d = durasi video nyata diambil dari ffprobe.
     video_s = float(probe(frames)["format"]["duration"])
-    pad = f"apad=whole_dur={video_s:.3f}"
-    if bed.exists():
-        audio_inputs += ["-i", str(bed)]
-        filter_parts.append(f"[1:a]volume=1.0,{pad}[vo]")
-        filter_parts.append("[2:a]volume=0.12[bed]")
-        filter_parts.append("[vo][bed]amix=inputs=2:duration=first:dropout_transition=0[aout]")
-    else:
-        filter_parts.append(f"[1:a]{pad}[aout]")
-    audio_map = "[aout]"
-
     suffix = "-preview" if args.preview else ""
     final = out_dir / f"{ep.name}{suffix}.mp4"
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-           "-i", str(frames), *audio_inputs,
-           "-filter_complex", ";".join(filter_parts),
-           "-map", "[v0]", "-map", audio_map]
-    if args.preview:
-        # Skala turun SETELAH caption dibakar: layout caption tetap sama,
-        # hanya resolusinya yang lebih ringan.
-        cmd += ["-vf", "scale=540:960"]
-    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "23" if args.preview else "18",
-            "-pix_fmt", "yuv420p", "-r", str(brand["canvas"]["fps"]),
-            "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-            "-movflags", "+faststart", str(final)]
+    cmd = build_mux_command(frames, vo, ass, final, preview=args.preview, video_duration=video_s, bed=bed)
     if args.preview:
         print("CATATAN: preview=540x960, validasi resolusi dilewati (bukan master)")
     sh(cmd)

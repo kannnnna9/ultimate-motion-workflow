@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "episode": "ump-second",
+  "fps": 30,
+  "cues": [
+    {"id": "c001", "t_ms": 112, "beat": "b001", "action": {"type": "reveal", "target": "csw-title"}, "sfx": null},
+    {"id": "c002", "t_ms": 5487, "beat": "b002", "action": {"type": "reveal", "target": "kejaksaan-agung"}, "sfx": null},
+    {"id": "c003", "t_ms": 13912, "beat": "b003", "action": {"type": "reveal", "target": "transfer-diagram", "params": {"illustration": {"path": "assets/illustration.svg", "seed": 23, "palette": ["#101A22", "#FF7A45", "#4FB3A9", "#F2EFE6"], "subject": "csw"}}}, "sfx": {"name": "cue-accent", "offset_frames": 1, "gain_db": -14}}
+  ]
+}
