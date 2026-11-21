@@ -6,7 +6,7 @@ Repo ini menyimpan keputusan editorial, template episode dan tooling dalam satu 
 
 ## Status
 
-**Status:** M1–M6 selesai lokal; branch belum dipush. Desain v1 disetujui. C1–C4 masih menunggu keputusan operator.
+- **Status:** M1–M6 selesai lokal; branch belum dipush. Desain v1 disetujui. C1–C4 masih menunggu keputusan operator.
 
 Yang ada sekarang: dokumen desain, roadmap, changelog, `LICENSE` MIT, `THIRD_PARTY_NOTICES.md`, Bang Motion yang di-vendor di `vendor/bang-motion/` (6 file, 152 KB), `.env.example`, dan folder kosong `templates/episode/`, `scripts/`, `demo/`, `skills/`. Yang belum ada: isi template, script, skill Hermes, demo. Urutan pengerjaan ada di [ROADMAP.md](ROADMAP.md) bagian B.
 

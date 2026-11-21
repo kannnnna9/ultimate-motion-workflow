@@ -50,7 +50,7 @@ Bagian dari v1.0, tapi belum ada satu pun yang selesai.
 | M3 | `scripts/` — setup, check, render, caption (dependency di-pinn) | `setup` jalan dari clean clone | ✅ `6737deb`, `cd35a8e`, `37c51d9` |
 | M4 | `skills/motion-pipeline/SKILL.md` — skill Hermes | Skill termuat, memandu alur satu episode | ✅ `8232e64` |
 | M5 | `demo/` — explainer dua adegan, VO lokal, caption, kartu sumber | MP4 jadi tanpa API key, ffprobe benar | ✅ render demo 1080×1920, H.264/AAC |
-| M6 | Verifikasi portabilitas | Clone dipindah, render ulang lulus | ⏳ harness dibuat; render clean clone setelah commit |
+| M6 | Verifikasi portabilitas | Clone dipindah, render ulang lulus | ✅ `scripts/verify_portability.py --render` → clean clone render PASS |
 
 ---
 
