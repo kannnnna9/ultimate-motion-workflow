@@ -45,6 +45,8 @@ render/
 # Audio episode: VO dan bed kecil ikut repo supaya render ulang tanpa jaringan.
 !demo/**/assets/audio/*.mp3
 !demo/**/assets/audio/*.wav
+!demo/**/work/captions.json
+!demo/**/work/captions.ass
 
 # Vendor: histori git upstream tidak ikut
 .git/
