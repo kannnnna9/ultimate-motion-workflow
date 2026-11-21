@@ -1,0 +1,46 @@
+{
+  "checkouts": [
+    {
+      "source_id": "anidoodle",
+      "path": "/home/agentuser/.cache/ump-research/anidoodle",
+      "remote": "https://github.com/alexgreensh/anidoodle",
+      "sha": "4ae27d2c281fcfd01bce87ab13dc5ad4df81a795",
+      "ref": "refs/heads/main"
+    },
+    {
+      "source_id": "huashu",
+      "path": "/home/agentuser/.cache/ump-research/huashu",
+      "remote": "https://github.com/alchaincyf/huashu-art-motion.git",
+      "sha": "",
+      "ref": "refs/heads/master"
+    },
+    {
+      "source_id": "lottiefiles",
+      "path": "/home/agentuser/.cache/ump-research/lottiefiles",
+      "remote": "https://github.com/LottieFiles/motion-design-skill",
+      "sha": "d77a9fc8cb371cab1ba5420df5bfd232cd14c9bb",
+      "ref": "refs/heads/main"
+    },
+    {
+      "source_id": "mg-styles-15",
+      "path": "/home/agentuser/.cache/ump-research/mg-styles-15",
+      "remote": "https://github.com/Vincentwei1021/mg-styles-15",
+      "sha": "8fab7eb49cc60590c518d1a932dfff753697fce7",
+      "ref": "refs/heads/main"
+    },
+    {
+      "source_id": "reanimate",
+      "path": "/home/agentuser/.cache/ump-research/reanimate",
+      "remote": "https://github.com/NiazMorshed2007/reanimate.git",
+      "sha": "",
+      "ref": "refs/heads/master"
+    },
+    {
+      "source_id": "bang-motion",
+      "path": "/home/agentuser/.hermes/cache/scratch/bang-motion",
+      "remote": "https://github.com/bangtutorial/bang-motion.git",
+      "sha": "c1aa65e921c970d858705fcb4a53a8294d1a4131",
+      "ref": "refs/heads/main"
+    }
+  ]
+}

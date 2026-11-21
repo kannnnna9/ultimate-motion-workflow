@@ -35,7 +35,7 @@ Satu-satunya versi yang sudah disetujui dan boleh dikerjakan.
 7. Isi Git hanya source, contoh yang boleh dibagikan, dan docs.
 8. Setelah publikasi: URL GitHub dan commit ter-push terverifikasi.
 
-**Status sekarang:** desain disetujui, dokumentasi ada, **implementasi belum jalan**. Repo belum punya `scripts/`, `templates/`, `demo/`, `skills/`, `LICENSE`, `THIRD_PARTY_NOTICES.md`.
+**Status sekarang:** workflow inti, plugin Hermes, acceptance gate, dan demo CSW sudah diimplementasikan di working tree. Bukti aktual ada di `docs/verification/ump.md`; cleanup riset memakai quarantine reversible dan tidak menghapus checkout yang dirty atau partial.
 
 ---
 
@@ -51,6 +51,10 @@ Bagian dari v1.0, tapi belum ada satu pun yang selesai.
 | M4 | `skills/motion-pipeline/SKILL.md` — skill Hermes | Skill termuat, memandu alur satu episode | ✅ `8232e64` |
 | M5 | `demo/` — explainer dua adegan, VO lokal, caption, kartu sumber | MP4 jadi tanpa API key, ffprobe benar | ✅ render demo 1080×1920, H.264/AAC |
 | M6 | Verifikasi portabilitas | Clone dipindah, render ulang lulus | ✅ `scripts/verify_portability.py --render` → clean clone render PASS |
+
+### T6/T7 integration status
+
+Acceptance gate T6 sudah tersedia di `scripts/verify_ump.py`, preset `minimal-explainer` sudah bisa dibangun dan dirender, dan bukti aktual dicatat di `docs/verification/ump.md`. T7 sudah memiliki manifest dan dry-run cleanup. Lima checkout riset ditolak untuk quarantine karena dirty atau partial Git state; tidak ada penghapusan otomatis.
 
 ---
 

@@ -1,0 +1,7 @@
+name: ump
+version: 0.1.0
+description: Produce, review and render portrait motion videos.
+author: kannnnna9
+requires_hermes: '>=0.21.5'
+provides_tools: [ump_styles, ump_job, ump_render, ump_artifact]
+provides_hooks: [pre_gateway_dispatch]

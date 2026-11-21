@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.render import build_mux_command
 from ump_core.project import DomainError, build_project, frame_at, load_preset
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,12 @@ class ProjectTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_preview_mux_scales_inside_complex_video_filter(self):
+        cmd = build_mux_command(Path("frames.mp4"), Path("voice.mp3"), Path("captions.ass"), Path("preview.mp4"), preview=True, video_duration=19.233)
+        command = " ".join(cmd)
+        self.assertIn("[0:v]ass=captions.ass,scale=540:960[v0]", command)
+        self.assertNotIn("-vf", cmd)
 
     def test_episode_drives_two_styles_and_literal_text(self):
         first = build_project(ROOT, FIXTURE, "dark-editorial", self.dst / "dark")

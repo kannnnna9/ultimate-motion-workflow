@@ -41,9 +41,11 @@
     {
       "id": "minimal-explainer",
       "name": "Minimal Explainer",
-      "status": "spec",
+      "status": "ready",
       "summary": "Latar terang, diagram sederhana, satu metafora visual per beat; cocok untuk konsep teknis yang perlu tenang.",
-      "reference": "styles/minimal-explainer/STYLE.md"
+      "reference": "styles/minimal-explainer/STYLE.md",
+      "composition": "styles/minimal-explainer/ump.html",
+      "preview": "styles/minimal-explainer/preview/"
     }
   ]
 }

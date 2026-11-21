@@ -151,10 +151,22 @@ def build_project(repo_root: Path, episode_dir: Path, style_id: str, dst: Path) 
     dst.mkdir(parents=True, exist_ok=True)
     package = Path(manifest["_path"]).parent
     (dst / "index.html").write_text(_html(manifest, brand, naskah, cue), encoding="utf-8")
-    assets = dst / "assets"
-    assets.mkdir(exist_ok=True)
+    stage = dst / "assets"
+    stage.mkdir(exist_ok=True)
     for asset in manifest["assets"]:
-        shutil.copy2(package / asset, assets / Path(asset).name)
+        shutil.copy2(package / asset, stage / Path(asset).name)
+    for source in (episode_dir / "assets").rglob("*"):
+        if source.is_file():
+            target = stage / source.relative_to(episode_dir / "assets")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    artwork = next((c.get("action", {}).get("params", {}).get("illustration") for c in cue["cues"] if isinstance(c.get("action"), dict)), None)
+    if isinstance(artwork, dict) and artwork.get("path"):
+        source = episode_dir / artwork["path"] if artwork["path"].startswith("assets/") else None
+        if source and source.is_file():
+            target = dst / artwork["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
     staged_cues = []
     for c in cue["cues"]:
         has_sfx = bool(c.get("sfx"))
