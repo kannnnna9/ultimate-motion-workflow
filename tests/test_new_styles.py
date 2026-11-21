@@ -24,6 +24,7 @@ NEW_STYLES = (
     "liquid",
     "aurora-glass",
     "synthwave",
+    "isometric",
 )
 
 
@@ -279,6 +280,114 @@ class SynthwaveContractTests(unittest.TestCase):
         self.assertIsNotNone(sun_rule)
         self.assertIn("background:linear-gradient", sun_rule.group(1))
         self.assertNotRegex(body, r"fromTo\('#sun',|to\('#sun',")
+
+
+class IsometricContractTests(unittest.TestCase):
+    """2.5D isometric has an exact projection; approximate it and it stops reading as iso.
+
+    Upstream names the SSR recipe (scale 86.6% -> shear +/-30 deg -> rotate -30 deg).
+    The style must project with real isometric math, not a guessed rotation, and it
+    must keep the three signatures that make the style recognisable: no vanishing
+    point, buildings growing from the ground plane, and a parallel camera slide.
+    """
+
+    def _body(self):
+        manifest = load_preset(ROOT, "isometric")
+        return Path(manifest["_entry_path"]).read_text(encoding="utf-8")
+
+    def test_projection_uses_true_isometric_ratios(self):
+        """A true iso projection needs cos(30)=0.866 and a 2:1 tile slope.
+
+        Guessed coefficients produce a dimetric look that reads as broken 3D,
+        so the constants have to be present and derived, not typed as decoration.
+        """
+        body = self._body()
+        self.assertIn("0.866", body, "missing the 86.6% vertical scale of a true iso projection")
+        self.assertIn("Math.cos(30", body.replace(" ", "").replace("Math.cos(30*Math.PI/180)", "Math.cos(30"))
+        self.assertIn("Math.sin(30", body.replace(" ", "").replace("Math.sin(30*Math.PI/180)", "Math.sin(30"))
+
+    def test_there_is_no_perspective_or_vanishing_point(self):
+        """Iso means parallel edges stay parallel; any perspective breaks the style."""
+        body = self._body()
+        self.assertNotIn("perspective:", body)
+        self.assertNotIn("rotateX(74deg)", body)
+        self.assertNotIn("PerspectiveCamera", body)
+
+    def test_three_face_shading_is_distinct(self):
+        """Top, left and right faces must differ in lightness or the solid reads flat."""
+        body = self._body()
+        for var in ("--face_top", "--face_left", "--face_right"):
+            self.assertIn(var + ":", body, f"{var} never declared")
+        values = re.findall(r"--face_(?:top|left|right)\s*:\s*(#[0-9A-Fa-f]{6})", body)
+        self.assertEqual(len(set(values)), 3, f"the three faces are not distinguishable: {values}")
+
+    def test_buildings_grow_from_the_ground_plane(self):
+        """Upstream: base lands, walls scaleY from 0, roof caps 2-3 frames later."""
+        body = self._body()
+        self.assertIn("scaleY", body)
+        self.assertRegex(body, r"transformOrigin|transform-origin")
+        self.assertIn("GROW", body)
+
+    def test_camera_slides_in_parallel_without_rotation(self):
+        """The signal move is a whole-stage translation; rotating it breaks iso."""
+        body = self._body()
+        self.assertIn("PARALLAX", body)
+        self.assertIn("1:0.8:0.6", body.replace(" ", ""))
+
+    def test_depth_order_is_screen_y(self):
+        """In iso, paint order is the screen y of the object; not CSS z-index alone."""
+        body = self._body()
+        self.assertIn("depth", body.lower())
+        self.assertRegex(body, r"zIndex|z-index")
+
+    def test_no_time_or_random_sources_break_seek_determinism(self):
+        body = self._body()
+        for banned in ("Math.random(", "Date.now(", "performance.now("):
+            self.assertNotIn(banned, body)
+
+    def test_timeline_duration_is_pinned_to_the_episode(self):
+        """A child tween with `repeat: -1` makes tl.duration() Infinity.
+
+        The seek driver then asks for frames far past the end and every capture
+        comes back as the frozen last state. An empty `tl.set({}, {}, D)` is also
+        a zero-length callback and never extends the timeline. The duration has
+        to be pinned explicitly.
+        """
+        body = self._body()
+        self.assertNotIn("repeat: -1", body)
+        self.assertIn("tl.duration(DURATION)", body)
+
+    def test_no_child_timeline_is_paused(self):
+        """A paused child timeline never advances when the parent is seeked.
+
+        The first card build nested `gsap.timeline({paused: true})` instances;
+        their text sets never ran, so the composition rendered with no episode
+        copy at all while every contract test still passed, because the markup
+        was present in the authored HTML. Only the root timeline may be paused.
+        """
+        body = self._body()
+        self.assertEqual(body.count("paused"), 1, "exactly one paused timeline: the root")
+        root = re.search(r"const tl = gsap\.timeline\(([^)]*)\)", body)
+        self.assertIsNotNone(root, "root timeline not found")
+        self.assertIn("paused", root.group(1), "the root timeline must be paused")
+        for args in re.findall(r"gsap\.timeline\(([^)]*)\)", body)[1:]:
+            self.assertNotIn("paused", args, f"a child timeline is paused: {args}")
+
+    def test_final_card_holds_to_the_end(self):
+        """A composed end frame is part of the style contract, not a fade-out."""
+        body = self._body()
+        self.assertRegex(body, r"DURATION\s*-\s*1\.9")
+
+    def test_a_card_owns_the_screen_until_the_next_beat(self):
+        """Fading a card out on a fixed timer leaves dead air between beats.
+
+        The first build faded every card 1.5 s after it appeared, so a 15 s
+        film had three ~3 s stretches with no text on screen. Each card has to
+        hold until the next beat replaces it.
+        """
+        body = self._body()
+        self.assertIn("next - 0.22", body)
+        self.assertNotIn("duration: 0.26, ease: 'power1.in' }, 1.5", body)
 
 
 class NewStyleBuildTests(unittest.TestCase):

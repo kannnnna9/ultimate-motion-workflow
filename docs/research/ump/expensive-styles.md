@@ -16,7 +16,7 @@ HyperFrames membatasi semua yang dirender ke satu bentuk:
 
 Sebelas style yang sudah diadopsi semua lolos kelima syarat itu. Tiga sisanya gagal, dan setiap kegagalannya punya sebab berbeda.
 
-## `03-isometric` — butuh model geometri, bukan properti
+## `03-isometric` — SUDAH DIADOPSI (lihat catatan koreksi di akhir)
 
 **Upstream memakai:** SVG dengan proyeksi isometrik 30°, tile builder, dan kamera yang bergerak di ruang 3D.
 
@@ -24,7 +24,11 @@ Sebelas style yang sudah diadopsi semua lolos kelima syarat itu. Tiga sisanya ga
 
 `hyperframes check` akan menolak ini bukan karena tidak bisa diraser, tetapi karena kamera bergerak di ruang 3D menghasilkan property `matrix3d` yang berubah tiap frame dari JS, yang tidak bisa dioptimasi sebagai satu tween transform. Hasilnya bisa jalan, tetapi berat dan rawan jitter saat seek.
 
-**Bisa dibuat?** Ya, dengan kompromi: kamera tidak bergerak, dan kedalaman dibuat dari urutan tumpuk + skala. Itu aproksimasi, bukan isometric sebenarnya.
+**Status: sudah dibuat.** `styles/isometric/` mengadopsi gaya ini dengan proyeksi iso sebenarnya.
+
+Catatan koreksi: diagnosis awal di atas keliru pada satu titik. Proyeksi iso tidak perlu dihitung ulang per frame. Geometrinya dibekukan di JS saat halaman dimuat (`proj(x,y,z)` dengan `Math.cos(30)` / `Math.sin(30)`), lalu yang dianimasikan hanya `scaleY` (bangunan tumbuh) dan `x`/`y` pada grup pembungkus (kamera menyusur paralel). Tidak ada `matrix3d` per frame, tidak ada jitter, dan `seek(t)` tetap murni.
+
+Yang hilang dibanding upstream: bayangan lembut, ambient occlusion, dan lapisan kehidupan (mobil, drone, turbin). Lihat `styles/isometric/STYLE.md`.
 
 ## `04-3d-render` — butuh renderer terpisah
 
@@ -59,7 +63,8 @@ Untuk nomor 3, ada jalan yang lebih jujur: **jangan** adopsi. Kalau nanti dibutu
 ## Rekomendasi
 
 - `10-synthwave`: kerjakan kalau ada episode yang memang butuh. Termurah dan paling aman.
-- `03-isometric`: tunggu kebutuhan nyata. Aproksimasinya menghilangkan hal yang membuat gaya ini dipilih.
+- `03-isometric`: **selesai** — diadopsi sebagai `styles/isometric/` tanpa WebGL.
+- `04-3d-render`: tetap butuh renderer terpisah; lihat ADR di ROADMAP T10.
 - `04-3d-render`: **jangan** diadopsi ke registry style. Kalau dibutuhkan, jadikan target render terpisah.
 
 Keputusan final perlu ADR di `docs/adr/` sebelum kode apa pun ditulis untuk T10.

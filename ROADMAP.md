@@ -107,7 +107,7 @@ Audit T1 hanya mengambil *teknik* dari enam repo rujukan. Katalog style upstream
 
 ### T10 — dua style yang tidak pas di HyperFrames (exploratory, pasca-1.0)
 
-Diagnosis lengkap ada di `docs/research/ump/expensive-styles.md`. Ringkasnya: `03-isometric` dan `04-3d-render` gagal di kontrak yang sama — mereka butuh renderer yang mengerti geometri, bukan DOM yang menggeser properti.
+Diagnosis lengkap ada di `docs/research/ump/expensive-styles.md`. `03-isometric` **sudah diadopsi** sebagai `styles/isometric/` (16 preset, 1.0.0) dengan proyeksi iso sebenarnya di SVG. Sisa satu: `04-3d-render`, yang memang butuh renderer terpisah karena esensinya pencahayaan dan material, bukan geometri.
 
 `10-synthwave` sudah diselesaikan lewat Jalur A pada T9 dan tidak lagi masuk lingkup T10.
 
@@ -117,7 +117,7 @@ Diagnosis lengkap ada di `docs/research/ump/expensive-styles.md`. Ringkasnya: `0
 - **Jalur B — renderer kedua di balik gate.** Three.js untuk `04-3d-render` dengan WebGL software (llvmpipe ada di VM ini). Biaya tinggi. Syarat: `ump_render` berhenti mengasumsikan satu komposisi HTML, dan determinisme per GPU driver harus dijamin.
 - **Jalur C — tetap di luar lingkup.** Dicatat di README sebagai keterbatasan yang disengaja.
 
-**Rekomendasi:** C untuk bentuk sekarang; A hanya kalau `03-isometric` dibutuhkan untuk episode nyata. Setiap pilihan harus masuk ADR sebelum ada kode.
+**Rekomendasi:** `04-3d-render` tetap tidak masuk registry style. Kalau nanti butuh 3D asli, jalurnya render kedua (`render3d`) dengan mesin lain dan aset Blender; WebGL di HyperFrames terbukti jalan tetapi renderer di VM ini software (llvmpipe), jadi tidak cocok untuk preset yang dipublikasikan. ADR sebelum ada kode.
 
 **Kriteria keluar T10:** satu ADR di `docs/adr/` memilih A/B/C dengan alasan teknis, dan 15/15 style MG Styles 15 tercatat statusnya.
 

@@ -159,6 +159,15 @@
       "source": "mg-styles-15 10-synthwave",
       "reference": "styles/synthwave/STYLE.md",
       "composition": "styles/synthwave/ump.html"
+    },
+    {
+      "id": "isometric",
+      "name": "Isometric 2.5D",
+      "status": "ready",
+      "summary": "Dunia miniatur 30° tanpa titik hilang; tiga sisi berbeda terang, bangunan tumbuh dari tanah, kamera menyusur paralel. Cocok untuk arsitektur, data center, dan alur sistem.",
+      "reference": "styles/isometric/STYLE.md",
+      "composition": "styles/isometric/ump.html",
+      "preview": "styles/isometric/preview.png"
     }
   ]
 }

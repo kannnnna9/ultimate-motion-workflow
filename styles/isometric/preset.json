@@ -1,0 +1,75 @@
+{
+  "id": "isometric",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#E8E2F5",
+    "ink": "#2A2340",
+    "accent": "#FF8A65",
+    "secondary": "#4ECDC4",
+    "face_top": "#FFFFFF",
+    "face_left": "#C9BFE4",
+    "face_right": "#9E92C4"
+  },
+  "typography": {
+    "display": "DejaVu Sans",
+    "body": "DejaVu Sans",
+    "weight": 700
+  },
+  "layout": {
+    "kind": "isometric-stage",
+    "origin_x": 540,
+    "origin_y": 1180,
+    "tile_px": 74,
+    "safe_area": {
+      "x": 80,
+      "y": 150,
+      "width": 920,
+      "height": 1180
+    }
+  },
+  "motion": {
+    "camera": "parallel-slide",
+    "parallax": "1:0.8:0.6",
+    "primary": {
+      "ease": "power2.out",
+      "offset_ms": 0
+    },
+    "secondary": {
+      "stagger_ms": 90
+    },
+    "ambient": {
+      "kind": "tile-breathe",
+      "amplitude": 0.03
+    }
+  },
+  "caption_safe_area": {
+    "x": 110,
+    "y": 1440,
+    "width": 860,
+    "height": 300
+  },
+  "signatures": [
+    "Math.cos(30",
+    "Math.sin(30",
+    "0.866",
+    "GROW",
+    "PARALLAX",
+    "1:0.8:0.6",
+    "depth",
+    "zIndex",
+    "scaleY"
+  ],
+  "sources": [
+    {
+      "repo": "anpicasso/mg-styles-15",
+      "commit": "8fab7eb",
+      "upstream": "03-isometric",
+      "license": "MIT",
+      "note": "Re-implemented as an SVG composition from prompts/03-isometric.md. Upstream renders with Three.js OrthographicCamera; this uses true isometric projection math on SVG so seeking stays deterministic and no WebGL context is needed."
+    }
+  ]
+}
