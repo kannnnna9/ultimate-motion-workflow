@@ -16,6 +16,7 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 - **`.env.example`** — variabel HyperFrames `0.9.72`, VO, caption, output.
 - **`.gitignore`** — OS, `node_modules`, `.env` (kecuali `.env.example`), cache, `out/`, media hasil render, dan metadata git upstream di vendor.
 - **Folder placeholder** — `templates/episode/`, `scripts/`, `demo/`, `skills/` masing-masing dengan `.gitkeep`.
+- **`templates/episode/`** — brand sheet, naskah, dan cue sebagai data JSON terpisah dari komposisi, dengan skema JSON, validator lintas berkas, dan episode contoh `_contoh` yang lulus validasi.
 
 ### Changed
 
