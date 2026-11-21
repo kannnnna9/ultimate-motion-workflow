@@ -1,0 +1,42 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+.ultra/
+
+# Dependency
+node_modules/
+.npm/
+.pnpm-store/
+
+# Secret & konfigurasi lokal
+.env
+.env.*
+!.env.example
+
+# Cache
+.cache/
+cache/
+*.cache
+hyperframes-cache/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Render & hasil besar
+out/
+render/
+*.mp4
+*.mov
+*.webm
+*.wav
+*.m4a
+*.mp3
+
+# Vendor: histori git upstream tidak ikut
+.git/
+.gitattributes
+.github/
