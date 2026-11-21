@@ -35,13 +35,35 @@ Satu-satunya versi yang sudah disetujui dan boleh dikerjakan.
 7. Isi Git hanya source, contoh yang boleh dibagikan, dan docs.
 8. Setelah publikasi: URL GitHub dan commit ter-push terverifikasi.
 
-**Status sekarang:** workflow inti, plugin Hermes, acceptance gate, dan demo CSW sudah diimplementasikan di working tree. Bukti aktual ada di `docs/verification/ump.md`; cleanup riset memakai quarantine reversible dan tidak menghapus checkout yang dirty atau partial.
+**Status sekarang:** workflow inti, plugin Hermes, acceptance gate, dan demo CSW sudah di-commit dan merge ke `main` (`edd6e63`). Pipeline job kini berjalan bertahap dan menolak lompatan langkah. Bukti aktual ada di `docs/verification/ump.md`; cleanup riset memakai quarantine reversible dan tidak menghapus checkout yang dirty atau partial.
+
+**Kriteria 8 (publikasi):** repo sudah publik dan commit ter-push terverifikasi — PR #1 merge ke `main`. Kriteria 1–8 lulus untuk alur Hermes.
+
+### Kontrak pipeline bertahap
+
+Job tidak bisa melompati langkah; server menolak dengan `STAGE_ORDER`. Urutan yang berlaku:
+
+| Stage | Masuk lewat | Keluar lewat |
+|---|---|---|
+| `intake` | `create` dengan topik | `set_brief` |
+| `brief_draft` | `set_brief` | `approve brief` |
+| `brief_approved` | approval brief | `research` |
+| `research_draft` | `research` dengan `sources` | `approve research` |
+| `research_approved` | approval riset | `write_naskah` / `import_naskah` |
+| `naskah_draft` | `write_naskah` | `approve naskah` |
+| `naskah_approved` | approval naskah | `select_style` |
+| `style_approved` | `select_style` | `ump_render` → `style_frame` |
+| `style_frame` | render style frame | `approve script_style` |
+| `preview` | render preview | `approve preview` |
+| `final_ready` | approval preview | — |
+
+`import_naskah` adalah satu-satunya jalur alternatif: mendarat di `naskah_draft` dengan `origin: "imported"` dan tetap wajib approval naskah.
 
 ---
 
-## B. Milestone v1 — urutan kerja yang belum dicentang
+## B. Milestone v1 — status
 
-Bagian dari v1.0, tapi belum ada satu pun yang selesai.
+M1–M6 selesai. T1–T7 selesai. Yang tersisa di v1.0 adalah C1–C4 yang masih menunggu keputusan operator, bukan pekerjaan terjadwal.
 
 | # | Milestone | Bukti selesai |
 |---|---|---|
@@ -55,6 +77,23 @@ Bagian dari v1.0, tapi belum ada satu pun yang selesai.
 ### T6/T7 integration status
 
 Acceptance gate T6 sudah tersedia di `scripts/verify_ump.py`, preset `minimal-explainer` sudah bisa dibangun dan dirender, dan bukti aktual dicatat di `docs/verification/ump.md`. T7 sudah memiliki manifest dan dry-run cleanup. Lima checkout riset ditolak untuk quarantine karena dirty atau partial Git state; tidak ada penghapusan otomatis.
+
+### T8 — pipeline bertahap (selesai, belum dirilis)
+
+| Item | Bukti |
+|---|---|
+| State machine `STAGES` + `advance`/`claim` gate | `ump_core/jobs.py`, `tests/test_stages.py` |
+| Gate aksi `ump_job` (`set_brief`, `research`, `write_naskah`, `import_naskah`, `select_style`) | `ump_core/tools.py`, `tests/test_stage_gate.py` |
+| Validasi `fact_refs` terhadap sumber yang direkam | `tests/test_stage_gate.py` |
+| Artifact dokumen (`brief`, `research`, `naskah`, `style_decision`) | `ump_core/worker.py`, `tests/test_worker.py` |
+| Skill mengikuti alur baru | `tests/test_stage_gate.py::test_skill_documents_every_stage_route` |
+| Migrasi database job lama | `tests/test_stages.py::test_legacy_database_is_migrated_idempotently` |
+
+Design dan plan: `docs/ultra/specs/2026-11-21-ump-staged-pipeline-design.md` dan `docs/ultra/plans/2026-11-21-ump-staged-pipeline.md`.
+
+**Belum tercakup:** riset belum otomatis mencari sumber sendiri — Hermes tetap memanggil `web_search`/`web_extract` lalu mengirim hasilnya lewat `research`. Tidak ada verifikasi silang fakta otomatis.
+
+**Kriteria keluar T8:** satu episode penuh dari topik sampai final dijalankan lewat Telegram dengan seluruh approval nyata, dan buktinya dicatat di `docs/verification/ump.md`.
 
 ---
 

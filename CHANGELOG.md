@@ -6,6 +6,16 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 
 ### Added
 
+- **Pipeline bertahap yang tidak bisa dilompati** — job UMP sekarang berjalan `intake → brief_draft → brief_approved → research_draft → research_approved → naskah_draft → naskah_approved → style_approved → style_frame → preview → final_ready`. Lompatan ditolak server dengan `STAGE_ORDER`, bukan hanya dilarang di prompt.
+- **Brief disusun UMP dari topik** — `ump_job create` menerima topik, lalu `set_brief` menulis brief kerja (audiens, durasi, sudut cerita) yang harus disetujui operator sebelum riset dimulai.
+- **Riset sebagai tahap wajib** — aksi `research` merekam `sources`; tanpa minimal satu sumber naskah tidak bisa ditulis (`RESEARCH_REQUIRED`).
+- **Validasi `fact_refs`** — setiap beat wajib mengutip sumber yang sudah direkam; referensi asing atau kosong ditolak dengan `FACT_REFS`.
+- **Jalur import naskah** — operator yang sudah punya naskah sendiri memakai `import_naskah`, mendarat di `naskah_draft` dengan `origin: "imported"`, dan tetap wajib melewati approval naskah serta menyertakan sumber.
+- **Pemilihan style setelah naskah disetujui** — `select_style` hanya boleh dipanggil di `naskah_approved`, sehingga preset dipilih berdasarkan ritme dan struktur beat yang sudah final.
+- **Artifact dokumen dari worker** — target `brief`, `research`, `naskah`, dan `style_decision` menerbitkan JSON reviewable lewat `ump_render` tanpa menjalankan HyperFrames.
+- **Approval bertahap** — `UMP APPROVE <job_id> <rev> <stage> <artifact_id>` kini menerima stage `brief`, `research`, `naskah`, `style`, `script_style`, dan `preview`.
+- **Migrasi database job** — database job lama ditambahi kolom `stage` dan `origin` secara idempoten; job lama tetap terbaca.
+
 - **Acceptance gate dan cleanup audit** — `minimal-explainer`, `scripts/verify_ump.py`, `tests/test_acceptance.py`, `scripts/cleanup_research.py`, `tests/test_cleanup.py`, serta bukti render dan manifest riset di `docs/verification/`.
 
 - **Style `kinetic-bold` naik ke `ready`** — komposisi `styles/kinetic-bold/index.html` (blok warna, kinetic typography, cut tajam), preview di `styles/kinetic-bold/preview/`, sudah lolos `hyperframes check` 0 error dan dirender 1080×1920 30 fps.
@@ -30,12 +40,16 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 
 ### Changed
 
+- **`skills/motion-pipeline/SKILL.md`** — alur diubah dari "pilih style dulu" menjadi topik → brief → riset → naskah → style → style frame → preview → final, dengan tabel stage dan penegasan bahwa langkah tidak boleh dilewati.
+- **`ump_render`** — target diperluas ke dokumen review (`brief`, `research`, `naskah`, `style_decision`) selain `style_frame`, `preview`, dan `final`.
+- **Revisi menurunkan stage** — revisi naskah setelah approval membatalkan approval hilir; style frame tidak bisa di-claim ulang tanpa approval baru.
+
 - **ROADMAP** — v1.x, v3, dan v4+ tidak lagi ditampilkan sebagai fase terjadwal. Ketiganya dipindahkan ke bagian "Menunggu keputusan operator" karena desain hanya menyebutnya bersyarat atau eksploratif, bukan komit.
 - **README** — status implementasi: sebelumnya "implementasi belum dimulai" dengan daftar artefak hilang, sekarang "M1 selesai; M2–M6 belum" dengan daftar artefak yang sudah ada. Bagian referensi menautkan `THIRD_PARTY_NOTICES.md` dan lokasi vendor.
 
 ### Notes
 
-Belum ada versi yang dirilis. Fasilitas repo (M1) sudah ada, tetapi belum ada satu pun bukti render. Entri versi ditambahkan saat v1.0 memenuhi kriteria selesai di [ROADMAP.md](ROADMAP.md) bagian A — bukan sebelum.
+Belum ada versi yang dirilis. T1–T7 sudah selesai dan 56 test lulus, tetapi entri versi ditambahkan saat v1.0 memenuhi seluruh kriteria selesai di [ROADMAP.md](ROADMAP.md) bagian A — bukan sebelum.
 
 Format saat rilis:
 

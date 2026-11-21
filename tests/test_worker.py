@@ -18,8 +18,26 @@ class WorkerTests(unittest.TestCase):
         self.store = JobStore(self.root)
         self.job = self.store.create('test worker')['job_id']
 
+    def _advance_to_style_approved(self):
+        chain = [
+            ('set_brief', 'intake', 'brief_draft'),
+            ('approve', 'brief_draft', 'brief_approved'),
+            ('research', 'brief_approved', 'research_draft'),
+            ('approve', 'research_draft', 'research_approved'),
+            ('write_naskah', 'research_approved', 'naskah_draft'),
+            ('approve', 'naskah_draft', 'naskah_approved'),
+            ('select_style', 'naskah_approved', 'style_approved'),
+        ]
+        for action, expect, target in chain:
+            if self.store.stage_of(self.job) == expect:
+                self.store.advance(self.job, self.store.get(self.job)['rev'], action,
+                                   expect=expect, to=target)
+        self.assertEqual(self.store.stage_of(self.job), 'style_approved')
+        return self.store.get(self.job)['rev']
+
     def test_worker_failure(self):
-        run = self.store.claim(self.job, 1, 'style_frame')['run_id']
+        rev = self._advance_to_style_approved()
+        run = self.store.claim(self.job, rev, 'style_frame')['run_id']
         worker.execute_run(self.store, run, [sys.executable, '-c', 'raise SystemExit(7)'])
         status = JobStore(self.root).get(self.job)
         self.assertEqual(status['status'], 'failed')
@@ -38,14 +56,39 @@ class WorkerTests(unittest.TestCase):
             self.addCleanup(p.stdin.close)
             return p
         with patch.object(worker, '_spawn', spawn, create=True):
-            run = worker.submit(self.store, self.job, 1, 'style_frame')
+            rev = self._advance_to_style_approved()
+            run = worker.submit(self.store, self.job, rev, 'style_frame')
             self.assertIn('run_id', run)
             self.assertIsNone(children[0].poll())
             with self.assertRaisesRegex(DomainError, 'ALREADY_RUNNING'):
-                worker.submit(self.store, self.job, 1, 'style_frame')
+                worker.submit(self.store, self.job, rev, 'style_frame')
+
+    def test_document_targets_publish_json_without_render(self):
+        job = self.store.create('documents')['job_id']
+        self.store.revise(job, 1, {'brief': 'Topik CSW untuk penonton komuter'})
+        self.store.advance(job, 2, 'set_brief', expect='intake', to='brief_draft')
+        rev = self.store.get(job)['rev']
+        run = self.store.claim(job, rev, 'brief')['run_id']
+        finished = worker.execute_run(self.store, run)
+        self.assertEqual(finished['status'], 'finished')
+        self.assertEqual(finished['artifact']['kind'], 'brief')
+        path = self.root / finished['artifact']['path']
+        self.assertTrue(path.is_file())
+        self.assertEqual(path.name, 'brief.json')
+        import json as _json
+        self.assertIn('CSW', _json.loads(path.read_text())['brief'])
+
+    def test_document_target_requires_its_stage(self):
+        with self.assertRaisesRegex(DomainError, 'STAGE_ORDER'):
+            self.store.claim(self.job, 1, 'brief')
+        job = self.store.create('documents')['job_id']
+        self.store.revise(job, 1, {'brief': 'x'})
+        self.store.advance(job, 2, 'set_brief', expect='intake', to='brief_draft')
+        self.store.claim(job, 2, 'brief')
 
     def test_abandoned_worker(self):
-        run = self.store.claim(self.job, 1, 'style_frame')['run_id']
+        rev = self._advance_to_style_approved()
+        run = self.store.claim(self.job, rev, 'style_frame')['run_id']
         run_dir = self.root / 'runs' / run
         # Real OS lock, then SIGKILL without finish.
         child = subprocess.Popen([sys.executable, '-c',

@@ -20,7 +20,9 @@ from .jobs import DomainError, JobStore
 ROOT = Path(__file__).resolve().parents[1]
 START_GRACE = 20
 RUN_TIMEOUT = 900
-MEDIA = {'style_frame': 'style-frame.png', 'preview': 'preview.mp4', 'final': 'final.mp4'}
+DOCS = {'brief': 'brief.json', 'research': 'research.json', 'naskah': 'naskah.json',
+        'style_decision': 'style-decision.json'}
+MEDIA = {'style_frame': 'style-frame.png', 'preview': 'preview.mp4', 'final': 'final.mp4', **DOCS}
 ID = re.compile(r'[A-Za-z0-9_-]{16}\Z')
 DEMO = 'explain-9x16'
 FIXTURES = {DEMO: 'work/captions.json', 'ump-second': 'fixtures/vo-boundaries.json'}
@@ -331,6 +333,36 @@ def _render(store, run, directory, command):
     return _mux(directory, episode, brand, cues, asset_root, target, command)
 
 
+def _document(store, run, directory):
+    """Publish the approved revision as a reviewable JSON artifact (no render)."""
+    snapshot = owned(store.root, run['snapshot_path'])
+    payload = _read(snapshot)
+    target = run['target']
+    if target == 'brief':
+        body = {'brief': payload.get('brief')}
+        if not isinstance(body['brief'], str) or not body['brief'].strip():
+            raise DomainError('INVALID_PAYLOAD', 'brief is empty')
+    elif target == 'research':
+        body = {'sources': payload.get('sources') or []}
+        if not body['sources']:
+            raise DomainError('RESEARCH_REQUIRED', 'no sources recorded')
+    elif target == 'naskah':
+        naskah, cue = payload.get('naskah'), payload.get('cue')
+        if not isinstance(naskah, dict) or not isinstance(cue, dict):
+            raise DomainError('EPISODE_REQUIRED', 'naskah and cue are required')
+        body = {'naskah': naskah, 'cue': cue, 'sources': payload.get('sources') or []}
+    elif target == 'style_decision':
+        style = payload.get('style_id')
+        if not isinstance(style, str):
+            raise DomainError('INVALID_STYLE', 'no style selected')
+        body = {'style_id': style}
+    else:
+        raise DomainError('INVALID_TARGET', target)
+    output = directory / DOCS[target]
+    _write(output, body)
+    return output
+
+
 def execute_run(store: JobStore, run_id: str, argv=None):
     directory = _run_dir(store, run_id)
     with _lease(directory) as acquired:
@@ -347,14 +379,17 @@ def execute_run(store: JobStore, run_id: str, argv=None):
             if argv is not None:  # local test seam; never exposed as a tool or CLI option
                 command(argv)
                 raise DomainError('INVALID_ARTIFACT', 'test renderer produced no output')
-            output = _render(store, run, directory, command)
+            if run['target'] in DOCS:
+                output = _document(store, run, directory)
+            else:
+                output = _render(store, run, directory, command)
             result = directory / MEDIA[run['target']]
             output.replace(result)
             return store.finish(run_id, result.name, None)
         except (Exception, SystemExit) as exc:
             error = str(exc).replace(str(directory), '<run>').replace('\n', ' ')[:500]
             # Keep the diagnostic log; staged copies and partial media are never published.
-            for name in ('frames.mp4', 'partial.mp4', *MEDIA.values()):
+            for name in ('frames.mp4', 'partial.mp4', *MEDIA.values(), *DOCS.values()):
                 (directory / name).unlink(missing_ok=True)
             return _fail_if_running(store, run_id, error or type(exc).__name__)
 
