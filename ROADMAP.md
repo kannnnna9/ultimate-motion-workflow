@@ -45,12 +45,12 @@ Bagian dari v1.0, tapi belum ada satu pun yang selesai.
 
 | # | Milestone | Bukti selesai |
 |---|---|---|
-| M1 | Struktur repo + `LICENSE` (MIT) + `THIRD_PARTY_NOTICES.md` + vendor Bang Motion | File ada, lisensi keenam sumber tercatat, `references/` Bang Motion masuk repo |
-| M2 | `templates/episode/` — brand sheet, naskah, cue, struktur folder | Template bisa dipakai untuk satu episode |
-| M3 | `scripts/` — setup, check, render, caption (dependency di-pinn) | `setup` jalan dari clean clone |
-| M4 | `skills/motion-pipeline/SKILL.md` — skill Hermes | Skill termuat, memandu alur satu episode |
-| M5 | `demo/` — explainer dua adegan, VO lokal, caption, kartu sumber | MP4 jadi tanpa API key, ffprobe benar |
-| M6 | Verifikasi portabilitas | Clone dipindah, render ulang lulus |
+| M1 | Struktur repo + `LICENSE` (MIT) + `THIRD_PARTY_NOTICES.md` + vendor Bang Motion | File ada, lisensi keenam sumber tercatat, `references/` Bang Motion masuk repo | ✅ `4a91286` |
+| M2 | `templates/episode/` — brand sheet, naskah, cue, struktur folder | Template bisa dipakai untuk satu episode | ✅ `320e1f7` |
+| M3 | `scripts/` — setup, check, render, caption (dependency di-pinn) | `setup` jalan dari clean clone | ✅ `6737deb`, `cd35a8e`, `37c51d9` |
+| M4 | `skills/motion-pipeline/SKILL.md` — skill Hermes | Skill termuat, memandu alur satu episode | ✅ `8232e64` |
+| M5 | `demo/` — explainer dua adegan, VO lokal, caption, kartu sumber | MP4 jadi tanpa API key, ffprobe benar | ✅ render demo 1080×1920, H.264/AAC |
+| M6 | Verifikasi portabilitas | Clone dipindah, render ulang lulus | ⏳ harness dibuat; render clean clone setelah commit |
 
 ---
 

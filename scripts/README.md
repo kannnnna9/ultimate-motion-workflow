@@ -9,6 +9,7 @@ Alat baris perintah untuk satu episode. Semua path dihitung dari lokasi script, 
 | `caption.py` | Naskah → VO `mp3` + caption per kata + batas beat | ya untuk `edge` |
 | `subs.py` | `captions.json` → subtitle ASS memakai font dan kotak aman dari `brand.json` | tidak |
 | `render.py` | Validasi → HyperFrames check/render → bakar caption + audio → verifikasi ffprobe | ya (npx) |
+| `verify_portability.py` | Ekspor HEAD ke clone sementara, cek aset/path lokal, validasi dan syntax; `--render` menguji render ulang | ya dengan `--render` |
 
 ## Urutan satu episode
 
