@@ -36,6 +36,9 @@ Target Linux dengan Hermes, Node/npm, Chrome, FFmpeg/ffprobe dan Python/uv. Hype
 - **[ROADMAP.md](ROADMAP.md)** — apa yang sudah diputuskan, apa yang masih menunggu keputusan, dan urutan milestone v1.
 - **[CHANGELOG.md](CHANGELOG.md)** — perubahan per versi.
 - **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)** — enam sumber rujukan, commit yang diaudit, dan lisensinya.
+- `styles/registry.json` — katalog preset style yang bisa dipilih per episode.
+- `styles/<id>/STYLE.md` — kontrak visual, gerak, copy, dan checklist preset.
+- `skills/motion-pipeline/SKILL.md` — alur Hermes dari pilihan style sampai render dan review.
 - **[desain v1](docs/ultra/specs/2026-11-21-ultimate-motion-workflow-design.md)** — spesifikasi dan kriteria penerimaan.
 
 Bang Motion (commit `c1aa65e`, MIT © 2026 Bang Tutorial) di-vendor di [`vendor/bang-motion/`](vendor/bang-motion/): `SKILL.md` dan empat referensi (`explainer`, `anti-ppt`, `techniques`, `architecture`) plus lisensinya. Empat repo rujukan lain (Reanimate, LottieFiles motion-design-skill, MG Styles 15, Huashu Art Motion, Anidoodle) **tidak** di-vendor — daftar commit, lisensi, dan batasan ukuran ada di [ROADMAP.md](ROADMAP.md) bagian E.

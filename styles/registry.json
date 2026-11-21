@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "default": "dark-editorial",
+  "styles": [
+    {
+      "id": "dark-editorial",
+      "name": "Dark Editorial",
+      "status": "ready",
+      "summary": "Tipografi besar, latar gelap, garis dan bentuk geometris; cocok untuk insight, tutorial, dan explainer teknologi.",
+      "reference": "styles/dark-editorial/STYLE.md",
+      "demo": "demo/explain-9x16/"
+    },
+    {
+      "id": "botanical-paper",
+      "name": "Botanical Paper",
+      "status": "spec",
+      "summary": "Dunia paper-cut berlapis dengan kamera yang berjalan terus; cocok untuk tempat, budaya, dan cerita observasional.",
+      "reference": "styles/botanical-paper/STYLE.md"
+    },
+    {
+      "id": "kinetic-bold",
+      "name": "Kinetic Bold",
+      "status": "spec",
+      "summary": "Blok warna, kinetic typography, cut cepat, dan aksen suara; cocok untuk hook dan daftar singkat.",
+      "reference": "styles/kinetic-bold/STYLE.md"
+    },
+    {
+      "id": "minimal-explainer",
+      "name": "Minimal Explainer",
+      "status": "spec",
+      "summary": "Latar terang, diagram sederhana, satu metafora visual per beat; cocok untuk konsep teknis yang perlu tenang.",
+      "reference": "styles/minimal-explainer/STYLE.md"
+    }
+  ]
+}

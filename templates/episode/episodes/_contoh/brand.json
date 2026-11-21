@@ -1,6 +1,7 @@
 {
   "version": 1,
   "episode": "_contoh",
+  "style_id": "dark-editorial",
   "canvas": {
     "width": 1080,
     "height": 1920,

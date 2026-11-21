@@ -4,11 +4,12 @@
   "title": "Episode brand sheet",
   "description": "Sumber kebenaran visual untuk satu episode. Semua warna, tipografi, dan aturan terukur di sini; komposisi mengambil nilai ini, tidak menebak.",
   "type": "object",
-  "required": ["version", "episode", "canvas", "palette", "typography", "safe_area", "banned"],
+  "required": ["version", "episode", "style_id", "canvas", "palette", "typography", "safe_area", "banned"],
   "additionalProperties": false,
   "properties": {
     "version": { "const": 1 },
     "episode": { "type": "string", "minLength": 1, "description": "Slug episode, sama dengan nama folder di templates/episode/episodes/<slug>/" },
+    "style_id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "description": "ID preset di styles/registry.json" },
     "canvas": {
       "type": "object",
       "required": ["width", "height", "fps", "codec", "audio_codec"],

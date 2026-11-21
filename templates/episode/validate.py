@@ -26,7 +26,9 @@ except ImportError:  # pragma: no cover - pesan jelas lebih baik daripada traceb
     sys.exit("jsonschema belum terpasang: pip install jsonschema>=4.20")
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
 SCHEMA_DIR = HERE / "schema"
+STYLE_REGISTRY = ROOT / "styles" / "registry.json"
 
 
 def load(path: Path) -> dict | None:
@@ -69,6 +71,18 @@ def _check(slug: str, brand: dict, naskah: dict, cue: dict) -> list[str]:
 
     for name, doc in (("brand", brand), ("naskah", naskah), ("cue", cue)):
         check_schema(name, doc, errors)
+    if errors:
+        return errors
+
+    if not STYLE_REGISTRY.exists():
+        errors.append(f"registry style tidak ditemukan: {STYLE_REGISTRY}")
+    else:
+        registry = json.loads(STYLE_REGISTRY.read_text(encoding="utf-8"))
+        style_ids = {style["id"] for style in registry.get("styles", [])}
+        if brand["style_id"] not in style_ids:
+            errors.append(
+                f"brand.json style_id '{brand['style_id']}' tidak ada di styles/registry.json"
+            )
     if errors:
         return errors
 
