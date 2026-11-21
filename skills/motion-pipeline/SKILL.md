@@ -13,9 +13,9 @@ Baca `styles/registry.json`, lalu buka `styles/<style-id>/STYLE.md`. Pilih satu 
 
 Preset yang tersedia:
 
-- `dark-editorial` — ready; demo `demo/explain-9x16/`
+- `dark-editorial` — ready; komposisi `demo/hyperframes/index.html`
+- `kinetic-bold` — ready; komposisi `styles/kinetic-bold/index.html`
 - `botanical-paper` — spec
-- `kinetic-bold` — spec
 - `minimal-explainer` — spec
 
 Style **spec** adalah kontrak desain yang sudah ditulis tetapi belum punya komposisi demo siap-render. Jangan mengklaim style itu ready sebelum ada komposisi, snapshot, dan render yang lulus.
@@ -84,11 +84,13 @@ Snapshot murah sebelum master:
 .venv/bin/python scripts/render.py <folder-episode> --project <folder-hyperframes> --snapshot 1,4,8
 ```
 
-Render master:
+Render master (komposisi otomatis dari `style_id`):
 
 ```bash
-.venv/bin/python scripts/render.py <folder-episode> --project <folder-hyperframes>
+.venv/bin/python scripts/render.py <folder-episode>
 ```
+
+Tanpa `--project`, `render.py` membaca `style_id` dari brand sheet lalu mengambil komposisi dari `styles/registry.json`. Style berstatus `spec` ditolak dengan pesan jelas. Pakai `--project` hanya untuk eksperimen komposisi di luar registry.
 
 `render.py` menjalankan validator, HyperFrames check/render, membakar ASS caption, memadukan audio, dan memeriksa ffprobe. Cache HyperFrames harus privat (`~/.hermes/hyperframes-cache`, mode 700). Jangan menghapus `out/` saat render masih berjalan.
 

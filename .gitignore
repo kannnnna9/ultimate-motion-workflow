@@ -48,6 +48,9 @@ render/
 !demo/**/work/captions.json
 !demo/**/work/captions.ass
 
+# Bukti visual preset style ikut repo (kecil, bukan render besar).
+!styles/**/preview/*.png
+
 # Vendor: histori git upstream tidak ikut
 .git/
 .gitattributes

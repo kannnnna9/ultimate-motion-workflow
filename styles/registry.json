@@ -8,7 +8,9 @@
       "status": "ready",
       "summary": "Tipografi besar, latar gelap, garis dan bentuk geometris; cocok untuk insight, tutorial, dan explainer teknologi.",
       "reference": "styles/dark-editorial/STYLE.md",
-      "demo": "demo/explain-9x16/"
+      "demo": "demo/explain-9x16/",
+      "composition": "demo/hyperframes/index.html",
+      "preview": "demo/explain-9x16/work/"
     },
     {
       "id": "botanical-paper",
@@ -20,9 +22,21 @@
     {
       "id": "kinetic-bold",
       "name": "Kinetic Bold",
-      "status": "spec",
+      "status": "ready",
       "summary": "Blok warna, kinetic typography, cut cepat, dan aksen suara; cocok untuk hook dan daftar singkat.",
-      "reference": "styles/kinetic-bold/STYLE.md"
+      "reference": "styles/kinetic-bold/STYLE.md",
+      "composition": "styles/kinetic-bold/index.html",
+      "preview": "styles/kinetic-bold/preview/",
+      "verified": {
+        "frames": [
+          2,
+          6,
+          11,
+          18
+        ],
+        "check": "0 error",
+        "render": "1080x1920 30fps h264 21.67s"
+      }
     },
     {
       "id": "minimal-explainer",

@@ -99,7 +99,9 @@ def validate_output(info: dict, brand: dict) -> list[str]:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("episode", type=Path)
-    ap.add_argument("--project", type=Path, required=True, help="folder proyek HyperFrames (index.html)")
+    ap.add_argument("--project", type=Path, default=None,
+                    help="folder proyek HyperFrames (index.html). Default: komposisi dari style_id episode")
+    ap.add_argument("--style", default=None, help="override style_id episode untuk render ini")
     ap.add_argument("--preview", action="store_true", help="render draft resolusi setengah")
     ap.add_argument("--snapshot", default=None, help="detik dipisah koma, mis. 1,4,8 — hanya snapshot")
     ap.add_argument("--keep-frames", action="store_true", help="simpan MP4 antara (frames.mp4)")
@@ -107,8 +109,20 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     ep = args.episode.expanduser().resolve()
-    project = args.project.expanduser().resolve()
     brand = json.loads((ep / "brand.json").read_text(encoding="utf-8"))
+    style_id = args.style or brand.get("style_id")
+    if args.project:
+        project = args.project.expanduser().resolve()
+    else:
+        registry = json.loads((ROOT / "styles" / "registry.json").read_text(encoding="utf-8"))
+        entry = next((s for s in registry["styles"] if s["id"] == style_id), None)
+        if entry is None:
+            sys.exit(f"style_id '{style_id}' tidak ada di styles/registry.json")
+        if not entry.get("composition"):
+            sys.exit(f"style '{style_id}' belum punya komposisi (status {entry.get('status')}) — "
+                     f"pakai --project manual atau selesaikan komposisinya dulu")
+        project = (ROOT / entry["composition"]).parent
+    print(f"style: {style_id} → {project}")
     out_dir = ROOT / "out" / ep.name
     out_dir.mkdir(parents=True, exist_ok=True)
     work = ep / "work"
