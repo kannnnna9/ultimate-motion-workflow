@@ -2,6 +2,19 @@
 
 Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) dan [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-11-22
+
+### Added
+- Preset `isometric` (2.5D isometrik) — proyeksi 30° sungguhan di SVG: `Math.cos(30)`/`Math.sin(30)` untuk foreshortening, tiga sisi dengan kontras berbeda, bangunan tumbuh dari alas, dan kamera menyusur paralel dengan rasio `1:0.8:0.6`. Katalog jadi 18 preset, 17 `ready`.
+- Sepuluh test kontrak baru untuk `isometric`, termasuk pengunci durasi timeline, larangan child timeline yang paused, dan cakupan teks beat.
+
+### Fixed
+- Kartu episode hilang dari layar selama beberapa detik: tiap kartu kini memegang layar sampai beat berikutnya mengambil alih, dan kartu terakhir bertahan sampai akhir.
+- Komposisi bisa melaporkan durasi tak terhingga saat sebuah tween berulang tanpa batas berada di dalamnya; durasi kini ditambatkan eksplisit ke durasi episode.
+
+### Changed
+- `docs/research/ump/expensive-styles.md` mengoreksi diagnosis `03-isometric`: proyeksi iso tidak perlu dihitung ulang per frame, sehingga gaya ini dapat diadopsi tanpa WebGL dan tanpa renderer terpisah.
+
 ## [1.0.0] - 2026-11-21
 
 ### Added

@@ -1,0 +1,218 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1080,height=1920"><title>UMP Isometric</title><script src="assets/gsap.min.js"></script><style>
+:root{
+  --ground:#E8E2F5;--ink:#2A2340;--accent:#FF8A65;--secondary:#4ECDC4;
+  --face_top:#FFFFFF;--face_left:#C9BFE4;--face_right:#9E92C4;
+  --edge:#4A3F6B;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
+#stage{position:relative;width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
+#world{position:absolute;inset:0}
+#tiles,#blocks,#shapes{position:absolute;inset:0}
+.plate{fill:var(--ground);stroke:var(--edge);stroke-width:1.6;opacity:.55}
+.face-top{fill:var(--face_top);stroke:var(--edge);stroke-width:2}
+.face-left{fill:var(--face_left);stroke:var(--edge);stroke-width:2}
+.face-right{fill:var(--face_right);stroke:var(--edge);stroke-width:2}
+.win{fill:var(--accent);opacity:0}
+#beat{position:absolute;left:80px;right:80px;bottom:300px;z-index:40;text-align:center;opacity:0}
+#beat .tag{display:inline-block;background:var(--ink);color:var(--face_top);font:700 28px/1 "DejaVu Sans",sans-serif;padding:12px 22px;letter-spacing:.2em;text-transform:uppercase}
+#beat h1{margin-top:24px;font:700 76px/1.08 "DejaVu Sans",sans-serif;color:var(--ink);letter-spacing:-.01em}
+#beat p{margin-top:20px;font:400 36px/1.4 "DejaVu Sans",sans-serif;color:#5B4E7D}
+#plinth{position:absolute;left:110px;right:110px;bottom:150px;height:5px;background:var(--edge);opacity:.18;z-index:39}
+</style></head><body data-composition-id="root" data-width="1080" data-height="1920" data-fps="30" data-duration="__UMP_DURATION__">
+<div id="cards" style="display:none">__UMP_CARDS__</div>
+<div id="world">
+  <svg id="shapes" viewBox="0 0 1080 1920" width="1080" height="1920" aria-hidden="true">
+    <g id="tiles"></g>
+    <g id="blocks"></g>
+  </svg>
+</div>
+<div id="plinth"></div>
+<div id="beat"><div class="tag"></div><h1></h1><p></p></div>
+<script>
+const EP = __UMP_EPISODE__;
+const DURATION = __UMP_DURATION__;
+const CARDS_NODES = Array.prototype.slice.call(document.querySelectorAll('#cards .beat'));
+const CARDS_DATA = CARDS_NODES.map(function(el){
+  return {
+    tag: (el.querySelector('.label') || {}).textContent || '',
+    headline: (el.querySelector('h2') || {}).textContent || '',
+    body: (el.querySelector('p') || {}).textContent || ''
+  };
+});
+
+/* ---- True isometric projection -------------------------------------------
+   A true iso camera is orthographic at 35.264 deg elevation and 45 deg
+   azimuth. Both axes therefore foreshorten by cos(30) = 0.866 and a unit
+   step on either ground axis advances 0.5 tile up or down the screen. That
+   is the 2:1 slope, and it is the whole reason the solid reads as iso
+   instead of as a cube drawn at a guessed angle. Orthographic means no
+   vanishing point: parallel edges stay parallel. */
+const COS30 = Math.cos(30 * Math.PI / 180);   // 0.866 — vertical foreshortening
+const SIN30 = Math.sin(30 * Math.PI / 180);   // 0.5   — the 2:1 screen slope
+const TILE = 74;
+const OX = 540, OY = 1180;
+
+function proj(x, y, z) {
+  const sx = (x - y) * TILE * COS30;
+  const sy = (x + y) * TILE * SIN30 - (z || 0);
+  return [OX + sx, OY + sy];
+}
+
+function pt(x, y, z) { const p = proj(x, y, z); return p[0].toFixed(2) + ',' + p[1].toFixed(2); }
+
+/* an iso box: three faces, each independently shaded */
+function isoBox(x, y, w, d, h) {
+  const top   = [pt(x, y, h), pt(x + w, y, h), pt(x + w, y + d, h), pt(x, y + d, h)].join(' ');
+  const left  = [pt(x, y + d, h), pt(x + w, y + d, h), pt(x + w, y + d, 0), pt(x, y + d, 0)].join(' ');
+  const right = [pt(x + w, y, h), pt(x + w, y + d, h), pt(x + w, y + d, 0), pt(x + w, y, 0)].join(' ');
+  return { top: top, left: left, right: right };
+}
+
+/* paint order IS the screen y of the object — depth is authoring order here,
+   never z-index alone, because a box behind another must be drawn first */
+function depth(x, y) { return (x + y) * TILE * SIN30 + OY; }
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+const tilesG = document.getElementById('tiles');
+const blocksG = document.getElementById('blocks');
+
+/* GROW: buildings rise from the ground plane as the episode advances */
+const GROW = [
+  { x: 1, y: 1, w: 2, d: 2, h: 210, at: 0.06 },
+  { x: 4, y: 1, w: 1, d: 1, h: 300, at: 0.12 },
+  { x: 1, y: 4, w: 1, d: 2, h: 160, at: 0.18 },
+  { x: 3, y: 3, w: 2, d: 1, h: 250, at: 0.24 },
+  { x: 5, y: 3, w: 1, d: 1, h: 380, at: 0.30 },
+  { x: 0, y: 2, w: 1, d: 1, h: 130, at: 0.36 },
+  { x: 2, y: 5, w: 2, d: 1, h: 190, at: 0.42 },
+  { x: 4, y: 4, w: 1, d: 2, h: 240, at: 0.48 },
+  { x: 0, y: 0, w: 1, d: 1, h: 170, at: 0.54 }
+];
+
+const buildingEls = [];
+GROW.slice().sort(function(a, b){ return depth(a.x, a.y) - depth(b.x, b.y); }).forEach(function(b, i){
+  const g = document.createElementNS(SVGNS, 'g');
+  const f = isoBox(b.x, b.y, b.w, b.d, b.h);
+  // draw back-to-front inside the solid: top, then left, then right
+  ['top', 'left', 'right'].forEach(function(kind){
+    const poly = document.createElementNS(SVGNS, 'polygon');
+    poly.setAttribute('points', f[kind]);
+    poly.setAttribute('class', 'face-' + kind);
+    g.appendChild(poly);
+  });
+  // windows on the right face, lit in sequence
+  const wins = [];
+  const rows = Math.max(1, Math.floor(b.h / 64));
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < b.d; c++) {
+      const wy = b.y + c + 0.25, wz = b.h - 40 - r * 58;
+      if (wz < 30) continue;
+      const a = proj(b.x + b.w, wy, wz), c2 = proj(b.x + b.w, wy + 0.5, wz);
+      const w = document.createElementNS(SVGNS, 'polygon');
+      w.setAttribute('points', [a[0] + ',' + a[1], c2[0] + ',' + c2[1],
+        c2[0] + ',' + (c2[1] - 26), a[0] + ',' + (a[1] - 26)].join(' '));
+      w.setAttribute('class', 'win');
+      g.appendChild(w);
+      wins.push(w);
+    }
+  }
+  g.style.zIndex = Math.round(depth(b.x, b.y));
+  blocksG.appendChild(g);
+  buildingEls.push({ g: g, wins: wins, at: b.at });
+});
+
+/* ground tiles drop in as a wave from the centre */
+const tileEls = [];
+const N = 7;
+for (let x = 0; x < N; x++) {
+  for (let y = 0; y < N; y++) {
+    const p = document.createElementNS(SVGNS, 'polygon');
+    p.setAttribute('points', [pt(x, y), pt(x + 1, y), pt(x + 1, y + 1), pt(x, y + 1)].join(' '));
+    p.setAttribute('class', 'plate');
+    p.style.zIndex = Math.round(depth(x, y)) - 100000;
+    tilesG.appendChild(p);
+    const dist = Math.abs(x - 3) + Math.abs(y - 3);
+    tileEls.push({ el: p, d: dist, cx: x, cy: y });
+  }
+}
+
+/* ---- timeline ------------------------------------------------------------ */
+const tl = gsap.timeline({ paused: true });
+const beat = document.getElementById('beat');
+const tagEl = beat.querySelector('.tag');
+const h1El = beat.querySelector('h1');
+const pEl = beat.querySelector('p');
+const touched = new Set();
+
+/* 0 – 2s : ground tiles flip in as a wave from the centre */
+tileEls.forEach(function(t){
+  tl.from(t.el, { opacity: 0, scale: 0.4, svgOrigin: (function(){
+    const c = proj(t.cx + 0.5, t.cy + 0.5, 0); return c[0] + ' ' + c[1];
+  })(), duration: 0.30, ease: 'back.out(2.2)' }, t.d * 0.045);
+});
+
+/* 0 – 6s : GROW — base lands, walls pull up, roof caps later */
+buildingEls.forEach(function(b){
+  const t0 = b.at * DURATION;
+  tl.fromTo(b.g, { scaleY: 0 }, {
+    scaleY: 1, duration: 0.46, ease: 'back.out(1.7)',
+    transformOrigin: '50% 100%', transformBox: 'fill-box'
+  }, t0);
+  if (b.wins.length) {
+    tl.to(b.wins, { opacity: 0.92, duration: 0.16, stagger: 0.035, ease: 'none' }, t0 + 0.42);
+  }
+});
+
+/* the cards carry the episode text; each beat owns its slice of the runtime.
+   The tweens are built here, up front, and a zero-duration call only fills
+   the text — inserting an infinite tween from inside a call would stop the
+   timeline from ever reaching its own duration. */
+if (CARDS_DATA.length) {
+  tl.set(beat, { opacity: 0, y: 0 }, 0);
+  const slot = DURATION / CARDS_DATA.length;
+  CARDS_DATA.forEach(function(c, i){
+    const at = Math.min(DURATION - 2.2, Math.max(0.4, i * slot + 0.4));
+    /* one card owns the screen until the next one takes it. Each entry is its
+       own zero-offset tween pair so a seek anywhere lands on a visible card
+       instead of the dead air between fades. */
+    tl.set([tagEl], { textContent: c.tag }, at);
+    tl.set([h1El], { textContent: c.headline }, at);
+    tl.set([pEl], { textContent: c.body }, at);
+    tl.to(beat, { opacity: 1, y: -18, duration: 0.34, ease: 'power2.out' }, at);
+    const next = (i + 1 < CARDS_DATA.length)
+      ? Math.min(DURATION - 2.2, Math.max(0.4, (i + 1) * slot + 0.4))
+      : DURATION;
+    tl.to(beat, { opacity: 0, duration: 0.22, ease: 'power1.in' }, Math.max(at + 0.4, next - 0.22));
+  });
+}
+/* the last card must hold to the end: a composed final frame, not a blank one */
+tl.set(beat, { opacity: 1 }, DURATION - 1.9)
+  .set([tagEl], { textContent: CARDS_DATA.length ? CARDS_DATA[CARDS_DATA.length - 1].tag : '' }, DURATION - 1.9)
+  .set([h1El], { textContent: CARDS_DATA.length ? CARDS_DATA[CARDS_DATA.length - 1].headline : '' }, DURATION - 1.9)
+  .set([pEl], { textContent: CARDS_DATA.length ? CARDS_DATA[CARDS_DATA.length - 1].body : '' }, DURATION - 1.9)
+  .to(beat, { opacity: 1, duration: 0.01 }, DURATION - 0.001);
+
+/* PARALLAX: the camera slides in parallel. 1 : 0.8 : 0.6 layer speeds,
+   no rotation — in iso any rotation breaks the projection. */
+const PARALLAX = { ratio: '1:0.8:0.6', far: 0.6, mid: 0.8, near: 1.0 };
+const layers = [
+  { el: document.getElementById('tiles'), k: PARALLAX.near },
+  { el: document.getElementById('blocks'), k: PARALLAX.mid }
+];
+layers.forEach(function(L){
+  tl.to(L.el, { x: -60 * L.k, y: 34 * L.k, duration: DURATION, ease: 'none' }, 0);
+});
+tl.to(document.getElementById('plinth'), { x: -60 * PARALLAX.far, duration: DURATION, ease: 'none' }, 0);
+
+/* living micro-motion held to the end so the final frame is not frozen.
+   An unlimited repeat child makes the timeline's own duration Infinity, so the
+   breathing is expressed as a finite 2-cycle tween instead. */
+tl.to('#world', { opacity: 0.985, duration: 0.5, yoyo: true, repeat: 1, ease: 'sine.inOut' }, DURATION - 1.2);
+
+/* pin the duration explicitly: an empty .set() is a zero-length callback and
+   does not extend the timeline. */
+tl.to({ _end: 0 }, { _end: 0, duration: 0.001 }, DURATION - 0.001);
+tl.duration(DURATION);
+window.__timelines={root:tl};
+</script></body></html>

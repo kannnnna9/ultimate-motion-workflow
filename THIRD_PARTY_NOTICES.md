@@ -97,3 +97,5 @@ Pola alur produksi (brand sheet → naskah → VO → caption → rencana scene 
 ## Aturan untuk kontribusi berikutnya
 
 Menyalin kode, aset, atau teks dari sumber luar wajib menambah entri di sini berisi URL, commit, lisensi, file yang disalin, dan file yang sengaja dilewati. Sumber tanpa lisensi tidak boleh disalin sebelum izin tertulis dari pemiliknya.
+
+- **`03-isometric`** → `styles/isometric/` — MIT, commit `8fab7eb`. Diimplementasi ulang dari `prompts/03-isometric.md` sebagai SVG dengan proyeksi iso terhitung; tidak ada HTML `demos/` yang disalin.
