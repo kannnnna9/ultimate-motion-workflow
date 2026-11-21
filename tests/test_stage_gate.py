@@ -153,6 +153,9 @@ class StageGateTests(unittest.TestCase):
                    sources=[{"id": "s1", "url": "https://example.com/a"}])
         self.store.advance(job_id, self.store.get(job_id)["rev"], "approve",
                            expect="research_draft", to="research_approved")
+        # the style is approved before the script is written
+        self.store.advance(job_id, self.store.get(job_id)["rev"], "select_style",
+                           expect="research_approved", to="style_approved")
         rev = self.store.get(job_id)["rev"]
         bad = {"beats": [{"id": "b1", "on_screen_text": "x", "narration": "y", "fact_refs": ["nope"]}]}
         with self.assertRaisesRegex(DomainError, "FACT_REFS"):

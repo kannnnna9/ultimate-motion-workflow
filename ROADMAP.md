@@ -49,10 +49,10 @@ Job tidak bisa melompati langkah; server menolak dengan `STAGE_ORDER`. Urutan ya
 | `brief_draft` | `set_brief` | `approve brief` |
 | `brief_approved` | approval brief | `research` |
 | `research_draft` | `research` dengan `sources` | `approve research` |
-| `research_approved` | approval riset | `write_naskah` / `import_naskah` |
+| `research_approved` | approval riset | `select_style` |
+| `style_approved` | `select_style` | `write_naskah` / `import_naskah` |
 | `naskah_draft` | `write_naskah` | `approve naskah` |
-| `naskah_approved` | approval naskah | `select_style` |
-| `style_approved` | `select_style` | `ump_render` → `style_frame` |
+| `naskah_approved` | approval naskah | `ump_render` → `style_frame` |
 | `style_frame` | render style frame | `approve script_style` |
 | `preview` | render preview | `approve preview` |
 | `final_ready` | approval preview | — |

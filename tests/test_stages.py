@@ -18,7 +18,9 @@ class StageMachineTests(unittest.TestCase):
     def test_stage_order_is_linear(self):
         self.assertEqual(STAGES[0], "intake")
         self.assertEqual(STAGES[-1], "final_ready")
-        self.assertEqual(STAGES.index("naskah_approved"), STAGES.index("research_approved") + 2)
+        # style sits between research and the script, not after the script
+        self.assertEqual(STAGES.index("style_approved"), STAGES.index("research_approved") + 1)
+        self.assertEqual(STAGES.index("naskah_draft"), STAGES.index("style_approved") + 1)
 
     def test_new_job_starts_at_intake(self):
         job = self.store.create("topik")

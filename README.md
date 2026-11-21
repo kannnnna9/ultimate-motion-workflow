@@ -6,7 +6,7 @@ Repo ini menyimpan keputusan editorial, template episode dan tooling dalam satu 
 
 ## Status
 
-- **Versi:** `1.1.0` — lihat [CHANGELOG.md](CHANGELOG.md) untuk rilis ini dan aturan penomoran berikutnya.
+- **Versi:** `1.2.0` — lihat [CHANGELOG.md](CHANGELOG.md) untuk rilis ini dan aturan penomoran berikutnya.
 - **Status:** workflow inti, acceptance gate, dan pipeline bertahap sudah di `main`. **18 preset style di registry, 17 `ready`**; botanical-paper masih `spec`. C1–C4 masih menunggu keputusan operator.
 
 Style yang siap pakai: `dark-editorial`, `kinetic-bold`, `minimal-explainer`, `line-art`, `bauhaus`, `cyber-hud`, `flat-vector`, `collage`, `morph`, `paperclip`, `pixel`, `cel-boil`, `liquid`, `aurora-glass`, `synthwave`, `isometric`. Semuanya komposisi HyperFrames 1080×1920 yang datanya datang dari naskah, bukan template statis.
@@ -25,10 +25,12 @@ Target Linux dengan Hermes, Node/npm, Chrome, FFmpeg/ffprobe dan Python/uv. Hype
 
 Langkah berjalan berurutan dan tidak bisa dilompati. Server menolak lompatan dengan `STAGE_ORDER`.
 
-1. **Kirim topik**, bukan brief lengkap. Hermes menyusun brief (audiens, durasi, sudut cerita), lalu kamu menyetujuinya lewat `UMP APPROVE <job_id> <rev> brief <artifact_id>`.
-2. **Setujui riset.** Hermes mencari sumber nyata dan mencatatnya; naskah tidak bisa ditulis tanpa minimal satu sumber. Setujui dengan `... research <artifact_id>`.
-3. **Setujui naskah.** Setiap beat wajib punya `fact_refs` yang mengarah ke sumber yang sudah disetujui. Setujui dengan `... naskah <artifact_id>`. Sudah punya naskah sendiri? Pakai jalur import — tetap wajib approval dan sumber.
-4. **Pilih style.** Setelah naskah disetujui, Hermes menawarkan preset. Hermes menyiapkan VO dan caption bertimestamp, lalu mencocokkan ejaan dan timing dengan audio.
+Persetujuan **bisa berupa kalimat biasa** ("ya setuju", "oke lanjut", "sip gas"). Kalau kalimatmu ambigu — pertanyaan, pengandaian, atau menyetujui dua tahap sekaligus — UMP meminta kamu menegaskan sekali lagi alih-alih menebak. Bentuk `UMP APPROVE <job_id> <rev> <stage> <artifact_id>` tetap ada sebagai alternatif untuk mengunci persetujuan ke artefak tertentu.
+
+1. **Kirim topik**, bukan brief lengkap. Hermes menyusun brief (audiens, durasi, sudut cerita), lalu kamu menyetujuinya cukup dengan kalimat biasa — "ya setuju" atau "oke lanjut".
+2. **Setujui riset.** Hermes mencari sumber nyata dan mencatatnya; naskah tidak bisa ditulis tanpa minimal satu sumber.
+3. **Pilih style.** Hermes menawarkan preset yang renderable. Style dipilih **sebelum** naskah, karena naskah ditulis untuk mengisi register visual itu.
+4. **Setujui naskah.** Setiap beat wajib punya `fact_refs` yang mengarah ke sumber yang sudah disetujui, dan panjang kalimatnya disesuaikan dengan style. Sudah punya naskah sendiri? Pakai jalur import — tetap wajib style, approval, dan sumber. Hermes lalu menyiapkan VO dan caption bertimestamp, dan mencocokkan ejaan serta timing dengan audio.
 5. **Setujui style frame**, lalu tinjau rencana adegan. Setiap beat memuat aksi visual, durasi, transisi dan cue efek suara jika dipakai.
 6. **Tonton preview ringan.** Beri revisi dengan timestamp, misalnya `00:04.2 — munculkan label setelah narator menyebut nama tempat`. Revisi naskah membatalkan approval hilir.
 7. **Terima MP4 final** 1080×1920, 30 fps, H.264/AAC, beserta kredit dan catatan produksi. QA mencakup pemeriksaan HyperFrames, ffprobe, caption terhadap audio, dan tinjauan frame kunci.
