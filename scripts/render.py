@@ -146,15 +146,18 @@ def main(argv: list[str]) -> int:
     audio_inputs = ["-i", str(vo)]
     filter_parts = [f"[0:v]ass={ass.as_posix()}[v0]"]
     bed = ep / "assets/audio/bed.mp3"
-    # apad tanpa argumen = buffer tak terbatas: VO yang lebih pendek dari komposisi
-    # tidak memotong kartu sumber. -shortest memotong di akhir video sebagai gantinya.
+    # apad dibatasi ke durasi `d`: apad TANPA argumen mengisi audio tanpa batas,
+    # dan bersama -shortest ffmpeg menulis sampai disk penuh ("No space left on
+    # device"). Nilai d = durasi video nyata diambil dari ffprobe.
+    video_s = float(probe(frames)["format"]["duration"])
+    pad = f"apad=whole_dur={video_s:.3f}"
     if bed.exists():
         audio_inputs += ["-i", str(bed)]
-        filter_parts.append("[1:a]volume=1.0,apad[vo]")
+        filter_parts.append(f"[1:a]volume=1.0,{pad}[vo]")
         filter_parts.append("[2:a]volume=0.12[bed]")
         filter_parts.append("[vo][bed]amix=inputs=2:duration=first:dropout_transition=0[aout]")
     else:
-        filter_parts.append("[1:a]apad[aout]")
+        filter_parts.append(f"[1:a]{pad}[aout]")
     audio_map = "[aout]"
 
     suffix = "-preview" if args.preview else ""

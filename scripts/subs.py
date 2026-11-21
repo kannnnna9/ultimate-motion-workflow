@@ -79,9 +79,12 @@ def main(argv: list[str]) -> int:
     font = brand["typography"]["captions"]
     max_words = brand["rules"]["max_words_per_line"]
 
-    # MarginV = jarak dari bawah ke baseline baris caption.
+    # MarginV = jarak dari BAWAH KANVAS ke baseline caption.
+    # Safe area mengatur tepi kiri/kanan dan batas atas konten, TIDAK dipakai
+    # untuk baseline caption: safe.bottom (1270 px) menaruh caption di tengah
+    # layar. Caption duduk di zona bawah, 12% dari dasar kanvas.
     safe = brand["safe_area"]
-    margin_v = h - (safe["y"] + safe["height"])
+    margin_v = int(h * 0.12)
     ml = safe["x"]
     mr = w - (safe["x"] + safe["width"])
 
