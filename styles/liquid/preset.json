@@ -1,0 +1,57 @@
+{
+  "id": "liquid",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#241233",
+    "ink": "#FFEDD5",
+    "accent": "#FF7A3D",
+    "secondary": "#FF3D8B",
+    "tertiary": "#8A4BFF"
+  },
+  "typography": {
+    "display": "DejaVu Sans",
+    "body": "DejaVu Sans",
+    "weight": 800
+  },
+  "layout": {
+    "kind": "organic-blob-field",
+    "safe_area": {
+      "x": 100,
+      "y": 170,
+      "width": 880,
+      "height": 1180
+    }
+  },
+  "motion": {
+    "camera": "static, blob-driven wave transition",
+    "easing": "cubic-bezier(0.22,1,0.36,1) flung",
+    "fps": 30
+  },
+  "caption_safe_area": {
+    "x": 150,
+    "y": 1450,
+    "width": 780,
+    "height": 250
+  },
+  "signatures": [
+    "feGaussianBlur",
+    "feColorMatrix",
+    "waveFront",
+    "drip",
+    "flung"
+  ],
+  "sources": [
+    {
+      "repo": "mg-styles-15",
+      "commit": "8fab7eb",
+      "path": "prompts/07-liquid.md",
+      "upstream_demo": "07-liquid",
+      "license": "MIT"
+    }
+  ],
+  "notes": "Metaball dibuat tanpa WebGL: tiga lingkaran yang diblur 20px lalu di-threshold lewat feColorMatrix alpha, sehingga saling menempel saat berdekatan. Front gelombang transisi dibentuk dari beberapa bulge dengan fase berbeda."
+}

@@ -46,6 +46,119 @@
       "reference": "styles/minimal-explainer/STYLE.md",
       "composition": "styles/minimal-explainer/ump.html",
       "preview": "styles/minimal-explainer/preview/"
+    },
+    {
+      "id": "line-art",
+      "name": "Line Art",
+      "status": "ready",
+      "summary": "Satu garis kontinu champagne di atas midnight, digambar lewat stroke-dashoffset dengan kamera mengikuti ujung pena. Untuk cerita arsitektur, tempat, dan ritme satu tarikan.",
+      "reference": "styles/line-art/STYLE.md",
+      "composition": "styles/line-art/ump.html"
+    },
+    {
+      "id": "bauhaus",
+      "name": "Bauhaus",
+      "status": "ready",
+      "summary": "Kertas krem, tiga warna primer, grid modular ketat, gerak pada 120 BPM tanpa overshoot. Untuk penjelasan yang butuh ketegasan poster.",
+      "reference": "styles/bauhaus/STYLE.md",
+      "composition": "styles/bauhaus/ump.html"
+    },
+    {
+      "id": "cyber-hud",
+      "name": "Cyber HUD",
+      "status": "ready",
+      "summary": "Lapisan FUI cyan dan oranye, radar berputar, data rolling, lock bracket, teks mesin. Untuk topik teknologi, pemetaan, dan pemantauan.",
+      "reference": "styles/cyber-hud/STYLE.md",
+      "composition": "styles/cyber-hud/ump.html"
+    },
+    {
+      "id": "flat-vector",
+      "name": "Flat Vector",
+      "status": "ready",
+      "summary": "Bentuk datar tanpa gradien, satu hero bergerak, overshoot elastis.",
+      "source": "mg-styles-15 01-flat-vector",
+      "reference": "styles/flat-vector/STYLE.md",
+      "composition": "styles/flat-vector/ump.html"
+    },
+    {
+      "id": "collage",
+      "name": "Collage",
+      "status": "ready",
+      "summary": "Potongan kertas koran, halftone, gerak 12 fps dengan jitter tangan.",
+      "source": "mg-styles-15 06-collage",
+      "reference": "styles/collage/STYLE.md",
+      "composition": "styles/collage/ump.html"
+    },
+    {
+      "id": "morph",
+      "name": "Morph",
+      "status": "ready",
+      "summary": "Satu bentuk berubah jadi bentuk lain lewat bridge, tanpa pernah terbelit.",
+      "source": "mg-styles-15 08-morph",
+      "reference": "styles/morph/STYLE.md",
+      "composition": "styles/morph/ump.html"
+    },
+    {
+      "id": "paperclip",
+      "name": "Paperclip",
+      "status": "ready",
+      "summary": "Kanvas raksasa yang digeser kamera, kartu beroutline putih, grafik presisi.",
+      "source": "mg-styles-15 19-paperclip",
+      "reference": "styles/paperclip/STYLE.md",
+      "composition": "styles/paperclip/ump.html"
+    },
+    {
+      "id": "pixel",
+      "name": "Pixel",
+      "status": "ready",
+      "summary": "Kanvas 180x320 nearest-neighbour, palet terbatas, gerak per piksel.",
+      "source": "mg-styles-15 20-pixel",
+      "reference": "styles/pixel/STYLE.md",
+      "composition": "styles/pixel/ump.html"
+    },
+    {
+      "id": "cel-boil",
+      "name": "Cel Boil",
+      "status": "ready",
+      "summary": "Garis yang bergetar tiap dua frame seperti digambar ulang.",
+      "source": "mg-styles-15 05-cel-boil",
+      "reference": "styles/cel-boil/STYLE.md",
+      "composition": "styles/cel-boil/ump.html"
+    },
+    {
+      "id": "liquid",
+      "name": "Liquid",
+      "status": "ready",
+      "summary": "Metaball fusion dari blur+threshold, transisi gelombang, drip.",
+      "source": "mg-styles-15 07-liquid",
+      "reference": "styles/liquid/STYLE.md",
+      "composition": "styles/liquid/ump.html"
+    },
+    {
+      "id": "aurora-glass",
+      "name": "Aurora Glass",
+      "status": "ready",
+      "summary": "Aurora blob ber-blur lambat dengan kartu kaca backdrop-filter.",
+      "source": "mg-styles-15 12-aurora-glass",
+      "reference": "styles/aurora-glass/STYLE.md",
+      "composition": "styles/aurora-glass/ump.html"
+    },
+    {
+      "id": "csw-transit-editorial",
+      "name": "CSW Transit Editorial",
+      "status": "ready",
+      "summary": "Ilustrasi arsitektur transit low-poly dengan signage biru, bus TransJakarta, skybridge, dan jalur pedestrian ke MRT ASEAN.",
+      "reference": "styles/csw-transit-editorial/STYLE.md",
+      "composition": "styles/csw-transit-editorial/ump.html"
+    },
+    {
+      "id": "synthwave",
+      "name": "Synthwave",
+      "status": "ready",
+      "summary": "Grid perspektif neon, matahari berbanding, judul krom dengan glow ganda.",
+      "source": "mg-styles-15 10-synthwave",
+      "reference": "styles/synthwave/STYLE.md",
+      "composition": "styles/synthwave/ump.html"
     }
   ]
 }

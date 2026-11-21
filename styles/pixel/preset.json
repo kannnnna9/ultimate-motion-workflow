@@ -1,0 +1,64 @@
+{
+  "id": "pixel",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#0E0A18",
+    "ink": "#F4F1E8",
+    "accent": "#FF3D7F",
+    "secondary": "#00D9C0",
+    "support": "#FFC857"
+  },
+  "typography": {
+    "display": "DejaVu Sans Mono",
+    "body": "DejaVu Sans Mono",
+    "weight": 700
+  },
+  "layout": {
+    "kind": "low-res-integer-scale",
+    "internal": {
+      "width": 180,
+      "height": 320
+    },
+    "scale": 6,
+    "safe_area": {
+      "x": 60,
+      "y": 190,
+      "width": 960,
+      "height": 1180
+    }
+  },
+  "motion": {
+    "camera": "parallax integer-pixel scroll",
+    "easing": "steps(1) discrete, no smoothing",
+    "fps": 12,
+    "render_fps": 30
+  },
+  "caption_safe_area": {
+    "x": 150,
+    "y": 1450,
+    "width": 780,
+    "height": 250
+  },
+  "signatures": [
+    "pixelated",
+    "nearestNeighbor",
+    "steps(1)",
+    "dither",
+    "parallax",
+    "320"
+  ],
+  "sources": [
+    {
+      "repo": "mg-styles-15",
+      "commit": "8fab7eb",
+      "path": "prompts/20-pixel.md",
+      "upstream_demo": "20-pixel",
+      "license": "MIT"
+    }
+  ],
+  "notes": "Kanvas internal 320x180 diskalakan integer dengan nearest-neighbour. Posisi sprite selalu bilangan bulat piksel dan waktunya dibulatkan, jadi tidak pernah ada easing halus."
+}

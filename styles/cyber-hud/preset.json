@@ -1,0 +1,60 @@
+{
+  "id": "cyber-hud",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#04141A",
+    "ink": "#00E5FF",
+    "accent": "#FF6A00",
+    "dim": "#0B4A55"
+  },
+  "typography": {
+    "display": "DejaVu Sans Mono",
+    "body": "DejaVu Sans Mono",
+    "tracking": "0.12em"
+  },
+  "layout": {
+    "kind": "hud-layered",
+    "safe_area": {
+      "x": 120,
+      "y": 260,
+      "width": 840,
+      "height": 1100
+    }
+  },
+  "motion": {
+    "camera": "static-hud",
+    "primary": {
+      "ease": "power3.out",
+      "offset_ms": 0
+    },
+    "secondary": {
+      "stagger_ms": 160
+    },
+    "ambient": {
+      "kind": "radar-sweep",
+      "period_s": 3.2
+    }
+  },
+  "caption_safe_area": {
+    "x": 150,
+    "y": 1450,
+    "width": 780,
+    "height": 250
+  },
+  "signatures": [
+    "conic-gradient",
+    "lock",
+    "scan",
+    "typewriter-effect"
+  ],
+  "sources": [
+    {
+      "name": "MG Styles 15 — 22-hud prompt",
+      "url": "https://github.com/Vincentwei1021/mg-styles-15/blob/8fab7eb49cc60590c518d1a932dfff753697fce7/prompts/22-hud.md"
+    }
+  ]
+}

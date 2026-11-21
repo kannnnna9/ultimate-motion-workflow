@@ -1,0 +1,57 @@
+{
+  "id": "morph",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#0E0E12",
+    "ink": "#F3F2EE",
+    "accent": "#7B5CFF",
+    "secondary": "#22C9A6",
+    "tertiary": "#FF6B4A"
+  },
+  "typography": {
+    "display": "DejaVu Sans",
+    "body": "DejaVu Sans",
+    "weight": 800
+  },
+  "layout": {
+    "kind": "centered-field",
+    "safe_area": {
+      "x": 96,
+      "y": 170,
+      "width": 888,
+      "height": 1180
+    }
+  },
+  "motion": {
+    "camera": "static, colour field wipes",
+    "easing": "cubic-bezier(0.7,0,0.3,1) with 3-frame cushions",
+    "fps": 30
+  },
+  "caption_safe_area": {
+    "x": 150,
+    "y": 1450,
+    "width": 780,
+    "height": 250
+  },
+  "signatures": [
+    "bridge",
+    "squash",
+    "colourField",
+    "equalVertex",
+    "morphEase"
+  ],
+  "sources": [
+    {
+      "repo": "mg-styles-15",
+      "commit": "8fab7eb",
+      "path": "prompts/08-morph.md",
+      "upstream_demo": "08-morph",
+      "license": "MIT"
+    }
+  ],
+  "notes": "Semua bentuk ditulis dengan jumlah titik yang sama dan titik pertama di posisi setara, jadi interpolasi tidak pernah terbelit. A ke B selalu lewat bridge."
+}

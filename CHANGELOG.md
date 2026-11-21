@@ -2,9 +2,43 @@
 
 Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) dan [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.0] - 2026-11-21
 
 ### Added
+
+- **Sembilan preset style tambahan dari MG Styles 15** — `flat-vector`, `collage`, `morph`, `paperclip`, `pixel`, `cel-boil`, `liquid`, `aurora-glass`, `synthwave`. Total preset `ready` sekarang dua belas, semuanya ditulis dari aturan visual di `prompts/`, bukan disalin dari `demos/`.
+- **`styles/flat-vector/`** — tanpa gradien, squash & stretch ±10%, stagger 3 frame, shape wipe, skyline tumbuh per gedung.
+- **`styles/collage/`** — grid 12 fps dengan jitter ±2 px, tepi potong putih, halftone, kertas koran berlapis.
+- **`styles/morph/`** — semua bentuk 12 titik sejajar, morph selalu lewat bridge lingkaran sehingga tidak pernah terbelit.
+- **`styles/paperclip/`** — kanvas 6000×3000 yang digeser kamera, kartu stiker outline putih, grafik berskala dengan count-up.
+- **`styles/pixel/`** — kanvas internal 180×320 skala ×6 nearest-neighbour, dither Bayer, sprite sebagai array piksel, langkah diskret.
+- **`styles/cel-boil/`** — line boil dari `feTurbulence` yang seed-nya berganti tiap dua frame, animasi on twos, smear 1/24 s, grain kertas.
+- **`styles/liquid/`** — metaball tanpa WebGL (blur 22 px + threshold `feColorMatrix`), front gelombang berfase, drip dengan squash.
+- **`styles/aurora-glass/`** — blob ber-blur 130 px yang mengalir pelan, kartu `backdrop-filter`, palet warna bertetangga, lensa pembesar.
+- **`styles/synthwave/`** — grid perspektif `rotateX(74deg)` dalam `perspective: 520px`, matahari berbanding lewat `mask-image`, judul krom `background-clip:text` dengan glow 4 px + 30 px, scanline statis. Pengganti murni CSS untuk WebGL upstream.
+- **`docs/research/ump/expensive-styles.md`** — diagnosis mengapa `03-isometric` dan `04-3d-render` tidak bisa masuk jalur HyperFrames, beserta tiga jalur adopsi dan rekomendasinya.
+- **Kontrak style diperketat di test** — komposisi wajib mengekspor `window.__timelines={root:tl}`, dilarang menyisakan `__UMP_TIMELINE__`/`addCue(`, wajib membaca `__UMP_CARDS__` dari DOM (`#cards .beat`) dan memasang `data-width`/`data-height`/`data-duration` di root.
+
+### Changed
+
+- **`scripts/render.py` mengambil nama file komposisi dari registry** — sebelumnya selalu mencari `index.html`, sehingga preset `ump.html` gagal sebelum render dimulai.
+- **Animasi yang menyentuh `top` diganti `transform`** di `liquid`; `hyperframes check` menolak animasi layout karena menghasilkan stutter saat seek per frame.
+
+### Fixed
+
+- **Delapan style baru tidak menyala di HyperFrames** — `window.__timelines` hilang (frame diam di 0 s), `addCue is not defined` dari token `__UMP_TIMELINE__` yang tertinggal, dan `__UMP_CARDS__` yang diperlakukan sebagai array JSON padahal berisi markup. Ketiganya kini dikunci test.
+- **Kontras teks di bawah WCAG 3:1** pada `aurora-glass`, `liquid`, `morph`, dan `paperclip`; diperbaiki dengan scrim dan palet label.
+- **Teks keluar kanvas / tertutup elemen lain** pada `collage`, `paperclip`, dan `morph`.
+- **`synthwave` render tanpa matahari.** Variabel `--sun_top`/`--sun_mid`/`--sun_bottom` hanya ada di `preset.json`, tidak pernah dideklarasikan di CSS, sehingga Chrome membuang seluruh deklarasi gradien dan kotak transparan yang tersisa lolos semua pemeriksaan. Test baru menolak `var()` yang tidak pernah dideklarasikan.
+- **Grid `synthwave` diam.** `rotateX` dan scroll transform berada di satu elemen sehingga translasi menimpa kemiringan; `background-size` juga tertelan shorthand. Kini dipisah: `#tilt` memegang kemiringan, `#grid` bergerak di dalamnya, dan test mengunci satu elemen tidak boleh memegang keduanya.
+- **Animasi `letterSpacing`** di judul synthwave ditolak sebagai motion non-transform; diganti opacity + transform.
+
+- **Tiga preset style dari MG Styles 15** — `line-art`, `bauhaus`, `cyber-hud`. Ditulis dari aturan visual di `prompts/02-line-art.md`, `prompts/09-bauhaus.md`, dan `prompts/22-hud.md`, bukan disalin dari `demos/`.
+- **`styles/line-art/`** — garis kontinu champagne di atas midnight; draw-on lewat `stroke-dashoffset`, pen-tip glow, line-to-fill, kamera dolly 4%.
+- **`styles/bauhaus/`** — kertas krem, tiga warna primer, grid modular 180 px, rotasi pivot bergantian, 120 BPM tanpa overshoot, judul vertikal.
+- **`styles/cyber-hud/`** — lapisan FUI cyan/oranye, radar `conic-gradient`, lock bracket, scanline, typewriter, hex grid 481 sel, data rolling yang mengendap.
+- **`tests/test_new_styles.py`** — menguji registrasi, signature benar-benar dipakai di komposisi, palet dan kamera tidak menduplikasi style lama, dan build nyata lewat `build_project`.
+- **`signatures` di preset.json** — setiap preset menyatakan token signature-nya, dan test menolak preset yang mendeklarasikan fitur yang tidak ada di komposisinya.
 
 - **Pipeline bertahap yang tidak bisa dilompati** — job UMP sekarang berjalan `intake → brief_draft → brief_approved → research_draft → research_approved → naskah_draft → naskah_approved → style_approved → style_frame → preview → final_ready`. Lompatan ditolak server dengan `STAGE_ORDER`, bukan hanya dilarang di prompt.
 - **Brief disusun UMP dari topik** — `ump_job create` menerima topik, lalu `set_brief` menulis brief kerja (audiens, durasi, sudut cerita) yang harus disetujui operator sebelum riset dimulai.
@@ -40,6 +74,9 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 
 ### Changed
 
+- **`THIRD_PARTY_NOTICES.md` §4** — MG Styles 15 sekarang mencatat tiga style yang diadopsi, file upstream mana yang dibaca, dan file upstream mana yang tidak diambil.
+- **`ROADMAP.md`** — status `main` jadi `c323ddd`; T9 ditambahkan dengan daftar 12 style MG Styles 15 yang **belum** diadopsi.
+
 - **`skills/motion-pipeline/SKILL.md`** — alur diubah dari "pilih style dulu" menjadi topik → brief → riset → naskah → style → style frame → preview → final, dengan tabel stage dan penegasan bahwa langkah tidak boleh dilewati.
 - **`ump_render`** — target diperluas ke dokumen review (`brief`, `research`, `naskah`, `style_decision`) selain `style_frame`, `preview`, dan `final`.
 - **Revisi menurunkan stage** — revisi naskah setelah approval membatalkan approval hilir; style frame tidak bisa di-claim ulang tanpa approval baru.
@@ -49,19 +86,12 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 
 ### Notes
 
-Belum ada versi yang dirilis. T1–T7 sudah selesai dan 56 test lulus, tetapi entri versi ditambahkan saat v1.0 memenuhi seluruh kriteria selesai di [ROADMAP.md](ROADMAP.md) bagian A — bukan sebelum.
+Rilis pertama yang dinyatakan stabil. `1.0.0` dipakai karena permukaan publiknya sudah beku: kontrak plugin (`ump_styles`, `ump_job`, `ump_render`, `ump_artifact`, hook `pre_gateway_dispatch`), kontrak token komposisi (`__UMP_CARDS__`, `__UMP_EPISODE__`, `__UMP_DURATION__`), dan skema `styles/registry.json`. Selama ketiganya tidak berubah, perilaku yang sudah ada tidak boleh berubah.
 
-Format saat rilis:
+Aturan penomoran setelah ini:
 
-```
-## [X.Y.Z] - YYYY-MM-DD
+- **MAJOR** naik kalau kontrak di atas berubah dengan cara yang memutus pekerjaan lama — misalnya token komposisi diganti nama, aksi `ump_job` dihapus, atau field `registry.json` wajib bertambah.
+- **MINOR** naik kalau ada preset style baru, target render baru, stage baru, atau aksi tool baru yang tidak memutus yang lama.
+- **PATCH** naik untuk perbaikan bug, kontras, tata letak, dan perubahan dokumen yang tidak mengubah perilaku.
 
-### Added
-### Changed
-### Deprecated
-### Removed
-### Fixed
-### Security
-```
-
-Satu baris per perubahan yang terlihat pengguna. Hapus kategori yang kosong.
+Penambahan preset style selalu MINOR, bukan PATCH, karena operator bisa memilih sesuatu yang sebelumnya tidak ada.

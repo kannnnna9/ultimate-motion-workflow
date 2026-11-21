@@ -1,0 +1,59 @@
+{
+  "id": "flat-vector",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#FFF6E9",
+    "ink": "#151433",
+    "accent": "#2B2BFF",
+    "secondary": "#FF5A4E",
+    "support": "#FFC62B",
+    "mint": "#2EE6A8"
+  },
+  "typography": {
+    "display": "DejaVu Sans",
+    "body": "DejaVu Sans",
+    "weight": 900
+  },
+  "layout": {
+    "kind": "openshot-stage",
+    "safe_area": {
+      "x": 96,
+      "y": 180,
+      "width": 888,
+      "height": 1180
+    }
+  },
+  "motion": {
+    "camera": "one-shot dolly 1.00→1.04",
+    "easing": "cubic-bezier(0.34,1.56,0.64,1) overshoot",
+    "stagger_frames": 3,
+    "fps": 30
+  },
+  "caption_safe_area": {
+    "x": 150,
+    "y": 1450,
+    "width": 780,
+    "height": 250
+  },
+  "signatures": [
+    "overshoot",
+    "squash",
+    "stagger",
+    "shapeWipe",
+    "flatNoGradient"
+  ],
+  "sources": [
+    {
+      "repo": "mg-styles-15",
+      "commit": "8fab7eb",
+      "path": "prompts/01-flat-vector.md",
+      "upstream_demo": "01-flat-vector",
+      "license": "MIT"
+    }
+  ],
+  "notes": "Bentuk datar, tanpa gradien, satu hero bergerak pada satu waktu. Adopsi aturan visual, bukan salinan kode."
+}

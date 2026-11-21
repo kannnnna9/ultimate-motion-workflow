@@ -1,0 +1,35 @@
+{
+  "id": "line-art",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": ["assets/gsap.min.js"],
+  "palette": {
+    "ground": "#0B1320",
+    "ink": "#E9D7A5",
+    "accent": "#E9D7A5",
+    "dim": "#4A5568"
+  },
+  "typography": {
+    "display": "DejaVu Serif",
+    "body": "DejaVu Sans",
+    "tracking": "0.28em"
+  },
+  "layout": {
+    "kind": "single-line-figure",
+    "safe_area": { "x": 120, "y": 260, "width": 840, "height": 1150 }
+  },
+  "motion": {
+    "camera": "dolly-follow-tip",
+    "primary": { "ease": "power2.inOut", "offset_ms": 0 },
+    "secondary": { "stagger_ms": 140 },
+    "ambient": { "kind": "line-drift", "amplitude": 0.03 }
+  },
+  "caption_safe_area": { "x": 150, "y": 1450, "width": 780, "height": 250 },
+  "signatures": ["stroke-dashoffset", "pen-tip", "line-to-fill", "dolly"],
+  "sources": [
+    {
+      "name": "MG Styles 15 — 02-line-art prompt",
+      "url": "https://github.com/Vincentwei1021/mg-styles-15/blob/8fab7eb49cc60590c518d1a932dfff753697fce7/prompts/02-line-art.md"
+    }
+  ]
+}

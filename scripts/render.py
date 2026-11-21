@@ -136,6 +136,7 @@ def main(argv: list[str]) -> int:
     ep = args.episode.expanduser().resolve()
     brand = json.loads((ep / "brand.json").read_text(encoding="utf-8"))
     style_id = args.style or brand.get("style_id")
+    entry_name = "index.html"
     if args.project:
         project = args.project.expanduser().resolve()
     else:
@@ -146,15 +147,17 @@ def main(argv: list[str]) -> int:
         if not entry.get("composition"):
             sys.exit(f"style '{style_id}' belum punya komposisi (status {entry.get('status')}) — "
                      f"pakai --project manual atau selesaikan komposisinya dulu")
-        project = (ROOT / entry["composition"]).parent
+        composition = ROOT / entry["composition"]
+        entry_name = composition.name
+        project = composition.parent
     print(f"style: {style_id} → {project}")
     out_dir = ROOT / "out" / ep.name
     out_dir.mkdir(parents=True, exist_ok=True)
     work = ep / "work"
     work.mkdir(exist_ok=True)
 
-    if not (project / "index.html").exists():
-        sys.exit(f"{project}/index.html tidak ada")
+    if not (project / entry_name).exists():
+        sys.exit(f"{project}/{entry_name} tidak ada")
 
     # 1. validasi data episode
     sh([sys.executable, str(ROOT / "templates/episode/validate.py"), str(ep)])

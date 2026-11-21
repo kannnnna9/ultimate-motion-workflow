@@ -1,0 +1,57 @@
+{
+  "id": "aurora-glass",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#070A18",
+    "ink": "#EEF2FF",
+    "accent": "#8B7BFF",
+    "secondary": "#3FC8E4",
+    "tertiary": "#C05BFF"
+  },
+  "typography": {
+    "display": "DejaVu Sans",
+    "body": "DejaVu Sans",
+    "weight": 300
+  },
+  "layout": {
+    "kind": "glass-card-stack",
+    "safe_area": {
+      "x": 96,
+      "y": 150,
+      "width": 888,
+      "height": 1180
+    }
+  },
+  "motion": {
+    "camera": "static, blobs drift on bezier paths",
+    "easing": "sine breathing, slow",
+    "fps": 30
+  },
+  "caption_safe_area": {
+    "x": 150,
+    "y": 1450,
+    "width": 780,
+    "height": 250
+  },
+  "signatures": [
+    "backdrop-filter",
+    "blur(",
+    "noise",
+    "adjacentHue",
+    "breathing"
+  ],
+  "sources": [
+    {
+      "repo": "mg-styles-15",
+      "commit": "8fab7eb",
+      "path": "prompts/12-aurora-glass.md",
+      "upstream_demo": "12-aurora-glass",
+      "license": "MIT"
+    }
+  ],
+  "notes": "Aurora dibuat dari lima blob ber-blur 90-150px yang bergerak sangat lambat, kartu kaca memakai backdrop-filter, dan grain 4% menahan banding. Palet hanya warna bertetangga."
+}

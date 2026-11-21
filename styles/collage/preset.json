@@ -1,0 +1,59 @@
+{
+  "id": "collage",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#E4DAC6",
+    "ink": "#141210",
+    "accent": "#C1272D",
+    "secondary": "#1B3A63",
+    "paper": "#F4EEDF"
+  },
+  "typography": {
+    "display": "DejaVu Serif",
+    "body": "DejaVu Sans Mono",
+    "weight": 700
+  },
+  "layout": {
+    "kind": "cut-paper-collage",
+    "safe_area": {
+      "x": 80,
+      "y": 160,
+      "width": 920,
+      "height": 1200
+    }
+  },
+  "motion": {
+    "camera": "static 12fps stepped, ±2px hand jitter",
+    "easing": "steps(2) quantised",
+    "fps": 12,
+    "render_fps": 30
+  },
+  "caption_safe_area": {
+    "x": 150,
+    "y": 1450,
+    "width": 780,
+    "height": 250
+  },
+  "signatures": [
+    "halftone",
+    "whiteEdge",
+    "stepped12",
+    "handJitter",
+    "jitter",
+    "newsprint"
+  ],
+  "sources": [
+    {
+      "repo": "mg-styles-15",
+      "commit": "8fab7eb",
+      "path": "prompts/06-collage.md",
+      "upstream_demo": "06-collage",
+      "license": "MIT"
+    }
+  ],
+  "notes": "Teks dan bentuk dipotong keras, halftone SVG, gerak 12 fps dengan jitter ±2px. Tanpa foto raster, jadi tidak butuh aset biner."
+}

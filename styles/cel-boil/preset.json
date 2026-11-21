@@ -1,0 +1,59 @@
+{
+  "id": "cel-boil",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#F2E7D3",
+    "ink": "#1A1512",
+    "accent": "#E8462F",
+    "secondary": "#F4B942",
+    "paper": "#F2E7D3"
+  },
+  "typography": {
+    "display": "DejaVu Serif",
+    "body": "DejaVu Serif",
+    "weight": 700
+  },
+  "layout": {
+    "kind": "drawn-frame",
+    "safe_area": {
+      "x": 110,
+      "y": 200,
+      "width": 860,
+      "height": 1140
+    }
+  },
+  "motion": {
+    "camera": "static with paper grain multiply",
+    "easing": "on twos, 12 effective fps",
+    "fps": 12,
+    "render_fps": 30
+  },
+  "caption_safe_area": {
+    "x": 150,
+    "y": 1450,
+    "width": 780,
+    "height": 250
+  },
+  "signatures": [
+    "boil",
+    "turbulence",
+    "onTwos",
+    "smear",
+    "paperGrain",
+    "Math.floor"
+  ],
+  "sources": [
+    {
+      "repo": "mg-styles-15",
+      "commit": "8fab7eb",
+      "path": "prompts/05-cel-boil.md",
+      "upstream_demo": "05-cel-boil",
+      "license": "MIT"
+    }
+  ],
+  "notes": "Line boil dibuat dengan feTurbulence + feDisplacementMap yang nilai seed-nya berganti tiap 2 frame, sehingga garis bergetar seperti digambar ulang. Tidak perlu empat varian garis manual."
+}

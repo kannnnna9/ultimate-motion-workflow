@@ -1,0 +1,130 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1080,height=1920"><title>UMP Liquid</title><script src="assets/gsap.min.js"></script><style>
+:root{--ground:#241233;--ink:#FFEDD5;--accent:#FF7A3D;--secondary:#FF3D8B;--tertiary:#8A4BFF}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
+#stage{position:relative;width:1080px;height:1920px;overflow:hidden;background:radial-gradient(120% 80% at 50% 12%,#3A1B52 0%,#241233 62%,#170B24 100%);font-family:"Inter","Helvetica Neue",Arial,sans-serif}
+/* metaball: blur then threshold the alpha channel */
+#blobs{position:absolute;inset:0;z-index:2}
+#gloss{position:absolute;inset:0;pointer-events:none;mix-blend-mode:screen;opacity:.55}
+#wave{position:absolute;left:-10%;width:120%;height:130%;top:100%;z-index:1;visibility:hidden;will-change:transform}
+#wave svg{width:100%;height:100%;display:block}
+#beat{position:absolute;left:100px;right:100px;bottom:280px;z-index:6;opacity:0;background:rgba(23,11,36,.86);border-radius:36px;padding:36px 40px;backdrop-filter:blur(6px)}
+#beat .tag{display:inline-block;padding:10px 24px;border-radius:999px;background:rgba(255,237,213,.14);border:2px solid rgba(255,237,213,.34);color:var(--ink);font:700 28px/1 "Inter",sans-serif;letter-spacing:.22em;text-transform:uppercase}
+#beat h1{margin-top:30px;font:800 104px/1.0 "Inter",sans-serif;color:var(--ink);letter-spacing:-.03em}
+#beat p{margin-top:26px;font:400 42px/1.42 "Inter",sans-serif;color:rgba(255,237,213,.72);max-width:860px}
+#drip{position:absolute;left:540px;top:1140px;width:26px;height:26px;border-radius:50% 50% 50% 50% / 60% 60% 40% 40%;background:var(--accent);z-index:4;opacity:0}
+</style></head><body data-composition-id="root" data-width="1080" data-height="1920" data-fps="30" data-duration="__UMP_DURATION__">
+<div id="cards" style="display:none">__UMP_CARDS__</div>
+<div id="stage">
+  <svg id="blobs" viewBox="0 0 1080 1920" preserveAspectRatio="none"><defs>
+    <filter id="meta" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="22" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" result="thresh"
+        values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 26 -12"/>
+    </filter>
+    <linearGradient id="candy" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FF7A3D"/><stop offset="52%" stop-color="#FF3D8B"/><stop offset="100%" stop-color="#8A4BFF"/>
+    </linearGradient>
+  </defs>
+  <g filter="url(#meta)">
+    <circle id="b1" cx="420" cy="700" r="170" fill="url(#candy)"/>
+    <circle id="b2" cx="680" cy="760" r="150" fill="url(#candy)"/>
+    <circle id="b3" cx="540" cy="900" r="132" fill="url(#candy)"/>
+  </g>
+  </svg>
+  <svg id="gloss" viewBox="0 0 1080 1920"><defs>
+    <radialGradient id="spec" cx="34%" cy="28%" r="42%">
+      <stop offset="0%" stop-color="#fff" stop-opacity=".85"/><stop offset="100%" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient></defs>
+    <ellipse cx="470" cy="640" rx="120" ry="80" fill="url(#spec)"/>
+  </svg>
+  <div id="wave"><svg viewBox="0 0 1080 1400" preserveAspectRatio="none">
+    <defs><linearGradient id="wf" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8A4BFF"/><stop offset="100%" stop-color="#FF3D8B"/></linearGradient></defs>
+    <path id="wavePath" fill="url(#wf)" d="M0,120 C120,60 240,150 360,96 C480,42 600,140 720,84 C840,28 960,120 1080,70 L1080,1400 L0,1400 Z"/>
+  </svg></div>
+  <div id="drip"></div>
+  <div id="beat"><div class="tag"></div><h1></h1><p></p></div>
+</div>
+<script>
+const EP = __UMP_EPISODE__;
+const DURATION = __UMP_DURATION__;
+/* Cards arrive as markup in #cards; read them from the DOM rather than as JSON. */
+const CARDS_NODES = Array.prototype.slice.call(document.querySelectorAll('#cards .beat'));
+const CARDS_DATA = CARDS_NODES.map(function(el){
+  return {
+    tag: (el.querySelector('.label') || {}).textContent || '',
+    headline: (el.querySelector('h2') || {}).textContent || '',
+    body: (el.querySelector('p') || {}).textContent || ''
+  };
+});
+
+const FLUNG = 'power4.out';   /* stands in for cubic-bezier(.22,1,.36,1): flung, never uniform */
+
+const tl = gsap.timeline({paused:true});
+const BEAT_LEN = Math.max(2.0, DURATION/4);
+
+/* Droplets fall and squash on landing. */
+tl.fromTo('#b1',{y:-700,scaleY:1.35,scaleX:0.7,opacity:0},
+  {y:0,opacity:1,duration:0.62,ease:FLUNG},0);
+tl.to('#b1',{scaleY:0.82,scaleX:1.16,duration:0.16,ease:'power2.out'},0.60);
+tl.to('#b1',{scaleY:1,scaleX:1,duration:0.34,ease:'elastic.out(1,0.5)'},0.76);
+
+/* Secondary droplets follow 2-3 frames late. */
+tl.fromTo('#b2',{y:-500,x:220,scaleY:1.3,opacity:0},{y:0,x:0,opacity:1,duration:0.55,ease:FLUNG},0.10);
+tl.fromTo('#b3',{y:-380,x:-180,scaleY:1.25,opacity:0},{y:0,x:0,opacity:1,duration:0.52,ease:FLUNG},0.20);
+
+/* Metaball fusion: the blobs drift together, the blurred alpha threshold does the welding. */
+tl.to('#b2',{x:-120,y:-40,duration:1.1,ease:'sine.inOut'},0.9);
+tl.to('#b3',{x:90,y:-90,duration:1.1,ease:'sine.inOut'},0.9);
+
+/* Neck stretch then snap back: separation with rebound. */
+tl.to('#b3',{x:210,y:120,duration:0.42,ease:'power3.in'},2.10);
+tl.to('#b3',{x:150,y:60,duration:0.30,ease:'elastic.out(1,0.4)'},2.52);
+
+/* waveFront: the flooding edge is re-sampled with phase-offset bulges
+/* squash: landing frames flatten the blob before it settles; the path is re-sampled with phase-offset bulges. */
+const wavePath = document.getElementById('wavePath');
+function waveShape(t, phase){
+  let d = 'M0,120';
+  const segs = 6;
+  for(let i=1;i<=segs;i++){
+    const x = (1080/segs)*i;
+    const y = 96 + Math.sin(t*2.2 + i*0.9 + phase) * 46;
+    const cx = x - 1080/segs/2;
+    const cy = y - 70 + Math.cos(t*2.2 + i*0.9) * 30;
+    d += ' C' + cx.toFixed(1) + ',' + cy.toFixed(1) + ' ' + cx.toFixed(1) + ',' + cy.toFixed(1) + ' ' + x.toFixed(1) + ',' + y.toFixed(1);
+  }
+  return d + ' L1080,1400 L0,1400 Z';
+}
+tl.to({t:0},{t:DURATION,duration:DURATION,ease:'none',onUpdate:function(){
+  wavePath.setAttribute('d', waveShape(this.targets()[0].t, 0.8));
+}},0);
+tl.set('#wave',{visibility:'visible'},2.30);
+tl.fromTo('#wave',{y:'0%'},{y:'-116%',duration:1.05,ease:'power2.inOut'},DURATION-2.4);
+
+/* Drip falls from the mass and ripples on landing. */
+tl.fromTo('#drip',{opacity:0,scale:0.4},{opacity:1,scale:1,duration:0.18,ease:'power2.out'},3.4);
+tl.to('#drip',{y:280,duration:0.55,ease:'power2.in'},3.6);
+tl.to('#drip',{scaleX:2.4,scaleY:0.3,opacity:0,duration:0.3,ease:'power2.out'},4.15);
+
+CARDS_DATA.forEach(function(card,i){
+  const start = 0.95 + i*BEAT_LEN;
+  if(start > DURATION-0.7) return;
+  tl.call(function(){
+    document.querySelector('#beat .tag').textContent = card.tag || ('FLOW ' + String(i+1).padStart(2,'0'));
+    document.querySelector('#beat h1').textContent = card.headline || '';
+    document.querySelector('#beat p').textContent = card.body || '';
+  },null,start);
+  tl.fromTo('#beat',{opacity:0,y:32},{opacity:1,y:0,duration:0.40,ease:FLUNG},start);
+  tl.to('#beat',{opacity:0,y:-26,duration:0.30,ease:'power2.in'},start+BEAT_LEN-0.34);
+});
+
+/* Coalesce into the wordmark: blobs contract behind the final type. */
+const END = DURATION - 1.2;
+tl.to(['#b1','#b2','#b3'],{scale:0.55,x:0,y:120,duration:0.7,ease:'power3.inOut'},END-0.3);
+
+window.__timelines={root:tl};
+window.__UMP_READY__=true;
+</script>
+</body></html>

@@ -1,0 +1,63 @@
+{
+  "id": "synthwave",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#0A0320",
+    "ink": "#F3E9FF",
+    "accent": "#FF2D95",
+    "secondary": "#22D3EE",
+    "sun_top": "#FFE066",
+    "sun_mid": "#FF9F1C",
+    "sun_bottom": "#FF2D95"
+  },
+  "typography": {
+    "display": "DejaVu Sans",
+    "body": "DejaVu Sans",
+    "weight": 900
+  },
+  "layout": {
+    "kind": "horizon-stage",
+    "horizon_y": 1180,
+    "safe_area": {
+      "x": 80,
+      "y": 180,
+      "width": 920,
+      "height": 1180
+    }
+  },
+  "motion": {
+    "camera": "low flight over the grid, sun rise",
+    "easing": "power3.out slam, linear grid rush",
+    "fps": 30
+  },
+  "caption_safe_area": {
+    "x": 150,
+    "y": 1450,
+    "width": 780,
+    "height": 250
+  },
+  "signatures": [
+    "perspective",
+    "rotateX",
+    "repeating-linear-gradient",
+    "mask-image",
+    "background-clip:text",
+    "drop-shadow",
+    "30px",
+    "translate-only"
+  ],
+  "sources": [
+    {
+      "repo": "mg-styles-15",
+      "commit": "8fab7eb",
+      "path": "prompts/10-synthwave.md",
+      "upstream_demo": "10-synthwave",
+      "license": "MIT"
+    }
+  ],
+  "notes": "Upstream memakai WebGL untuk grid dan canvas untuk teks krom. Di sini keduanya diganti primitif CSS: bidang perspektif rotateX(74deg), matahari berbanding lewat mask repeating-linear-gradient, krom dari background-clip:text plus dua drop-shadow. Pass VHS dibatasi ke scanline statis supaya seek tetap deterministik; jitter waktu nyata dan glitch acak dari upstream sengaja tidak diambil."
+}

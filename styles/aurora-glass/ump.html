@@ -1,0 +1,114 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1080,height=1920"><title>UMP Aurora Glass</title><script src="assets/gsap.min.js"></script><style>
+:root{--ground:#070A18;--ink:#EEF2FF;--accent:#8B7BFF;--secondary:#3FC8E4;--tertiary:#C05BFF}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
+#stage{position:relative;width:1080px;height:1920px;overflow:hidden;background:var(--ground);font-family:"Inter","Helvetica Neue",Arial,sans-serif}
+#aurora{position:absolute;inset:-15%;filter:blur(130px) saturate(1.25);opacity:.92}
+.blob{position:absolute;border-radius:50%;will-change:transform}
+#b1{width:820px;height:820px;left:-60px;top:60px;background:var(--accent)}
+#b2{width:700px;height:700px;right:-80px;top:280px;background:var(--secondary)}
+#b3{width:760px;height:760px;left:120px;bottom:340px;background:var(--tertiary)}
+#b4{width:620px;height:620px;right:40px;bottom:80px;background:#5A6BFF}
+#b5{width:540px;height:540px;left:300px;top:760px;background:#4FD1C5}
+#noise{position:absolute;inset:0;opacity:.045;pointer-events:none;mix-blend-mode:overlay}
+#lens{position:absolute;left:120px;top:1180px;width:420px;height:420px;border-radius:50%;
+  background:radial-gradient(circle at 34% 28%,rgba(255,255,255,.34),rgba(255,255,255,.05) 52%,rgba(139,123,255,.22) 78%);
+  backdrop-filter:blur(22px) saturate(1.5);-webkit-backdrop-filter:blur(22px) saturate(1.5);
+  border:1px solid rgba(255,255,255,.30);box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 40px 120px rgba(0,0,0,.45);z-index:4}
+.card{position:absolute;z-index:5;border-radius:44px;padding:44px 48px;
+  background:rgba(255,255,255,.07);
+  backdrop-filter:blur(34px) saturate(1.4);-webkit-backdrop-filter:blur(34px) saturate(1.4);
+  border:1px solid rgba(255,255,255,.20);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.30),0 30px 90px rgba(0,0,0,.38)}
+#tag{position:absolute;left:96px;top:150px;z-index:6;font:600 28px/1 "Inter",sans-serif;letter-spacing:.32em;color:rgba(238,242,255,.92);text-transform:uppercase}
+#beat{left:96px;right:96px;bottom:400px;opacity:0;background:rgba(7,10,24,.62);border-radius:32px;padding:32px 36px}
+#beat .kicker{font:600 26px/1 "Inter",sans-serif;letter-spacing:.30em;color:var(--secondary);text-transform:uppercase}
+#beat h1{margin-top:24px;font:300 96px/1.02 "Inter",sans-serif;color:var(--ink);letter-spacing:-.035em}
+#beat p{margin-top:24px;font:300 42px/1.44 "Inter",sans-serif;color:rgba(238,242,255,.86)}
+#ui{right:96px;top:150px;width:420px;z-index:6;opacity:0}
+#ui .row{display:flex;align-items:center;gap:16px;margin-bottom:22px}
+#ui .pill{flex:1;height:16px;border-radius:8px;background:rgba(255,255,255,.22)}
+#ui .dot{width:52px;height:52px;border-radius:50%;background:rgba(139,123,255,.55);border:1px solid rgba(255,255,255,.35)}
+#ui .wave{display:flex;align-items:flex-end;gap:6px;height:64px}
+#ui .wave i{width:8px;background:var(--secondary);border-radius:4px;display:block}
+#title{position:absolute;left:96px;right:96px;bottom:200px;z-index:7;opacity:0}
+#title b{display:block;font:300 78px/1.06 "Inter",sans-serif;color:var(--ink);letter-spacing:-.03em}
+#title span{display:block;margin-top:20px;font:400 36px/1 "Inter",sans-serif;color:rgba(238,242,255,.80);letter-spacing:.1em}
+</style></head><body data-composition-id="root" data-width="1080" data-height="1920" data-fps="30" data-duration="__UMP_DURATION__">
+<div id="cards" style="display:none">__UMP_CARDS__</div>
+<div id="stage">
+  <div id="aurora">
+    <div class="blob" id="b1"></div><div class="blob" id="b2"></div>
+    <div class="blob" id="b3"></div><div class="blob" id="b4"></div><div class="blob" id="b5"></div>
+  </div>
+  <svg id="noise" viewBox="0 0 1080 1920" preserveAspectRatio="none"><filter id="nz">
+    <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="4" seed="5"/></filter>
+    <rect width="1080" height="1920" filter="url(#nz)"/></svg>
+  <div id="lens"></div>
+  <div id="tag">aurora · flat to light</div>
+  <div id="ui">
+    <div class="row"><div class="dot"></div><div class="pill"></div></div>
+    <div class="row"><div class="wave"><i style="height:22px"></i><i style="height:40px"></i><i style="height:28px"></i><i style="height:56px"></i><i style="height:34px"></i><i style="height:46px"></i></div></div>
+    <div class="row"><div class="pill"></div><div class="pill" style="flex:.6"></div></div>
+  </div>
+  <div class="card" id="beat"><div class="kicker"></div><h1></h1><p></p></div>
+  <div id="title"><b></b><span>ump · aurora</span></div>
+</div>
+<script>
+const EP = __UMP_EPISODE__;
+const DURATION = __UMP_DURATION__;
+/* Cards arrive as markup in #cards; read them from the DOM rather than as JSON. */
+const CARDS_NODES = Array.prototype.slice.call(document.querySelectorAll('#cards .beat'));
+const CARDS_DATA = CARDS_NODES.map(function(el){
+  return {
+    tag: (el.querySelector('.label') || {}).textContent || '',
+    headline: (el.querySelector('h2') || {}).textContent || '',
+    body: (el.querySelector('p') || {}).textContent || ''
+  };
+});
+
+
+/* adjacentHue: violet 261deg -> blue 232deg -> cyan 189deg -> teal 173deg: violet -> blue -> cyan -> teal. A clashing hue muddies the mesh. */
+const tl = gsap.timeline({paused:true});
+const BREATHE = 'sine.inOut';
+
+/* Blobs drift on long bezier paths. Nothing here is fast; speed breaks the style. */
+tl.to('#b1',{x:220,y:180,duration:DURATION*0.9,ease:BREATHE},0);
+tl.to('#b2',{x:-260,y:220,duration:DURATION,ease:BREATHE},0);
+tl.to('#b3',{x:180,y:-240,duration:DURATION*0.95,ease:BREATHE},0);
+tl.to('#b4',{x:-200,y:-200,duration:DURATION*0.8,ease:BREATHE},0);
+tl.to('#b5',{x:-160,y:300,scale:1.18,duration:DURATION,ease:BREATHE},0);
+
+/* breathing: near-sine easing everywhere, nothing snaps with the same slow period so the frame feels alive. */
+tl.to('#aurora',{scale:1.06,duration:DURATION/2,repeat:1,yoyo:true,ease:BREATHE,transformOrigin:'50% 45%'},0);
+
+/* Glass cards float in with parallax depth, opacity + 8px rise only. */
+tl.fromTo('#ui',{opacity:0,y:8},{opacity:1,y:0,duration:0.9,ease:BREATHE},0.3);
+tl.fromTo('#lens',{opacity:0,scale:0.92,y:14},{opacity:1,scale:1,y:0,duration:1.1,ease:BREATHE},0.6);
+
+/* WOW: the lens glides across the aurora and magnifies it. */
+tl.to('#lens',{x:380,y:-420,scale:1.08,duration:DURATION*0.55,ease:BREATHE},DURATION*0.30);
+
+const BEAT_LEN = Math.max(2.3, DURATION/4);
+CARDS_DATA.forEach(function(card,i){
+  const start = 0.7 + i*BEAT_LEN;
+  if(start > DURATION-0.9) return;
+  tl.call(function(){
+    document.querySelector('#beat .kicker').textContent = card.tag || ('LIGHT ' + String(i+1).padStart(2,'0'));
+    document.querySelector('#beat h1').textContent = card.headline || '';
+    document.querySelector('#beat p').textContent = card.body || '';
+  },null,start);
+  tl.fromTo('#beat',{opacity:0,y:8},{opacity:1,y:0,duration:0.75,ease:BREATHE},start);
+  tl.to('#beat',{opacity:0,y:-8,duration:0.6,ease:BREATHE},start+BEAT_LEN-0.7);
+});
+
+const END = DURATION - 1.4;
+tl.fromTo('#title',{opacity:0,y:8},{opacity:1,y:0,duration:1.0,ease:BREATHE},END);
+tl.call(function(){
+  document.querySelector('#title b').textContent = 'Satu ide, satu cahaya.';
+},null,END);
+
+window.__timelines={root:tl};
+window.__UMP_READY__=true;
+</script>
+</body></html>
