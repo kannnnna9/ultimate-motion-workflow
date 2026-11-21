@@ -1,0 +1,6 @@
+# Paket Python untuk pipeline ini. Versi di-pin agar hasil render bisa diulang.
+jsonschema==4.26.0
+edge-tts==7.3.1
+# Opsional: hanya untuk VO_ENGINE=external (transkrip VO eksternal).
+# Berat (±500 MB dengan model small). Pasang manual bila dibutuhkan:
+# faster-whisper==1.2.0
