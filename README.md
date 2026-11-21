@@ -6,7 +6,7 @@ Repo ini menyimpan keputusan editorial, template episode dan tooling dalam satu 
 
 ## Status
 
-- **Status:** workflow inti dan acceptance gate sudah berjalan di working tree. Tiga style `ready` (dark-editorial, kinetic-bold, minimal-explainer); botanical-paper masih `spec`. C1–C4 masih menunggu keputusan operator.
+- **Status:** workflow inti, acceptance gate, dan pipeline bertahap sudah di `main`. Tiga style `ready` (dark-editorial, kinetic-bold, minimal-explainer); botanical-paper masih `spec`. C1–C4 masih menunggu keputusan operator.
 
 Yang ada sekarang: template episode, dua komposisi baseline, preset onboarding, plugin Hermes, demo CSW, verifier acceptance, dan bukti verifikasi di [`docs/verification/ump.md`](docs/verification/ump.md). Checkout riset eksternal tidak dihapus otomatis; status audit dan quarantine tercatat di manifest.
 
@@ -18,11 +18,15 @@ Target Linux dengan Hermes, Node/npm, Chrome, FFmpeg/ffprobe dan Python/uv. Hype
 
 ## Alur satu episode
 
-1. Kirim brief berisi topik, audiens, durasi, sumber fakta dan bahan yang boleh dipakai.
-2. Setujui naskah dan satu style frame. Hermes menyiapkan VO dan caption bertimestamp, lalu mencocokkan ejaan dan timing dengan audio.
-3. Tinjau rencana adegan. Setiap beat memuat aksi visual, durasi, transisi dan cue efek suara jika dipakai.
-4. Tonton preview ringan. Beri revisi dengan timestamp, misalnya `00:04.2 — munculkan label setelah narator menyebut nama tempat`.
-5. Terima MP4 final 1080×1920, 30 fps, H.264/AAC, beserta kredit dan catatan produksi. QA mencakup pemeriksaan HyperFrames, ffprobe, caption terhadap audio, dan tinjauan frame kunci.
+Langkah berjalan berurutan dan tidak bisa dilompati. Server menolak lompatan dengan `STAGE_ORDER`.
+
+1. **Kirim topik**, bukan brief lengkap. Hermes menyusun brief (audiens, durasi, sudut cerita), lalu kamu menyetujuinya lewat `UMP APPROVE <job_id> <rev> brief <artifact_id>`.
+2. **Setujui riset.** Hermes mencari sumber nyata dan mencatatnya; naskah tidak bisa ditulis tanpa minimal satu sumber. Setujui dengan `... research <artifact_id>`.
+3. **Setujui naskah.** Setiap beat wajib punya `fact_refs` yang mengarah ke sumber yang sudah disetujui. Setujui dengan `... naskah <artifact_id>`. Sudah punya naskah sendiri? Pakai jalur import — tetap wajib approval dan sumber.
+4. **Pilih style.** Setelah naskah disetujui, Hermes menawarkan preset. Hermes menyiapkan VO dan caption bertimestamp, lalu mencocokkan ejaan dan timing dengan audio.
+5. **Setujui style frame**, lalu tinjau rencana adegan. Setiap beat memuat aksi visual, durasi, transisi dan cue efek suara jika dipakai.
+6. **Tonton preview ringan.** Beri revisi dengan timestamp, misalnya `00:04.2 — munculkan label setelah narator menyebut nama tempat`. Revisi naskah membatalkan approval hilir.
+7. **Terima MP4 final** 1080×1920, 30 fps, H.264/AAC, beserta kredit dan catatan produksi. QA mencakup pemeriksaan HyperFrames, ffprobe, caption terhadap audio, dan tinjauan frame kunci.
 
 ## Mengembangkan workflow
 

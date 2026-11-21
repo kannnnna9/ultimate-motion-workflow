@@ -11,14 +11,28 @@ import threading
 import time
 from pathlib import Path
 
-from .jobs import DomainError, JobStore
+from .jobs import STAGE_KIND, DomainError, JobStore
 from .worker import FIXTURES, ID, MEDIA, ROOT, _valid_words, episode_docs, owned, reconcile, submit
 
-_APPROVAL = re.compile(r'UMP APPROVE ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8}) (script_style|preview) ([A-Za-z0-9_-]{16})\Z')
+_APPROVAL = re.compile(
+    r'UMP APPROVE ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8}) '
+    r'(brief|research|naskah|style|script_style|preview) ([A-Za-z0-9_-]{16})\Z')
 _AUDIO = re.compile(r'UMP VO ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8})\Z')
 _EVENTS = {}
 _EVENT_LOCK = threading.Lock()
 _MAX_AUDIO = 20 * 1024 * 1024
+
+# action -> (stages it may start from, stage it lands in)
+# Every pipeline step is an explicit route; anything absent is INVALID_ACTION.
+# import_naskah always lands in naskah_draft so an imported script still has to
+# be approved before a style can be chosen.
+_STAGE_ROUTES = {
+    'set_brief': (('intake',), 'brief_draft'),
+    'research': (('brief_approved',), 'research_draft'),
+    'write_naskah': (('research_approved',), 'naskah_draft'),
+    'import_naskah': (('intake', 'brief_draft', 'brief_approved', 'research_approved'), 'naskah_draft'),
+    'select_style': (('naskah_approved',), 'style_approved'),
+}
 
 
 def _home():
@@ -170,7 +184,7 @@ def _check_patch(store, job, rev, patch):
         from ..templates.episode.validate import _check
     else:
         from templates.episode.validate import _check
-    allowed = ('brand', 'naskah', 'cue', 'cues', 'style_id', 'fixture', 'voice_words')
+    allowed = ('brand', 'naskah', 'cue', 'cues', 'style_id', 'fixture', 'voice_words', 'brief', 'sources')
     _check_keys(patch, (), allowed)
     if not patch or len(json.dumps(patch, allow_nan=False)) > 131072:
         raise DomainError('INVALID_PAYLOAD', 'revision is empty or too large')
@@ -218,6 +232,84 @@ def _check_patch(store, job, rev, patch):
     return patch
 
 
+def _stage_action(store, job, rev, action, target, payload):
+    """Apply one pipeline step and record the transition.
+
+    The revision is captured before mutating so the documented flow of
+    `revise` -> `advance` -> `_job` stays consistent with rev increments.
+    """
+    _revision(rev)
+    note = None
+    if action == 'set_brief':
+        patch = payload['patch']
+        _check_keys(patch, ('brief',))
+        if not isinstance(patch['brief'], str) or not patch['brief'].strip() or len(patch['brief']) > 12000:
+            raise DomainError('INVALID_PAYLOAD', 'brief must be text up to 12000 characters')
+        store.revise(job, rev, {'brief': patch['brief']})
+    elif action == 'research':
+        sources = payload['sources']
+        if not isinstance(sources, list) or not sources:
+            raise DomainError('RESEARCH_REQUIRED', 'record at least one source')
+        for index, item in enumerate(sources):
+            _check_keys(item, ('id', 'url'), ('title', 'note'))
+            if not isinstance(item['id'], str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}', item['id']):
+                raise DomainError('INVALID_PAYLOAD', f'sources[{index}].id')
+            if not isinstance(item['url'], str) or not item['url'].startswith(('https://', 'http://')):
+                raise DomainError('INVALID_PAYLOAD', f'sources[{index}].url')
+        current = _snapshot(store, job, _current_rev(store, job))
+        if isinstance(current.get('sources'), list) and current['sources']:
+            sources = current['sources'] + sources
+        store.revise(job, rev, {'sources': sources})
+    elif action in ('write_naskah', 'import_naskah'):
+        if action == 'import_naskah':
+            note = payload.get('origin') or 'imported'
+            if note != 'imported':
+                raise DomainError('INVALID_PAYLOAD', 'origin must be "imported"')
+        _check_fact_refs(store, job, payload['naskah'], payload['cue'])
+        store.revise(job, rev, {'naskah': payload['naskah'], 'cue': payload['cue']})
+    elif action == 'select_style':
+        style = payload['style_id']
+        if not isinstance(style, str):
+            raise DomainError('INVALID_STYLE', 'expected a preset ID')
+        if not any(item['id'] == style and item['renderable'] for item in _catalog()['styles']):
+            raise DomainError('INVALID_STYLE', 'preset is not renderable')
+        store.revise(job, rev, {'style_id': style})
+    new_rev = _current_rev(store, job)
+    origin = 'imported' if note == 'imported' else None
+    return store.advance(job, new_rev, action, expect=store.stage_of(job), to=target,
+                         note=note, origin=origin)
+
+
+def _current_rev(store, job):
+    return store.get(job)['rev']
+
+
+def _check_fact_refs(store, job, naskah, cue):
+    """Every beat must cite a source that the research step actually recorded."""
+    if not isinstance(naskah, dict) or not isinstance(naskah.get('beats'), list):
+        raise DomainError('INVALID_PAYLOAD', 'naskah.beats must be a list')
+    if not isinstance(cue, dict) or not isinstance(cue.get('cues'), list):
+        raise DomainError('INVALID_PAYLOAD', 'cue.cues must be a list')
+    snapshot = _snapshot(store, job, _current_rev(store, job))
+    known = {item['id'] for item in snapshot.get('sources', []) if isinstance(item, dict) and 'id' in item}
+    if not known:
+        raise DomainError('RESEARCH_REQUIRED', 'record sources before writing the script')
+    beats = {}
+    for index, beat in enumerate(naskah['beats']):
+        if not isinstance(beat, dict) or not isinstance(beat.get('id'), str):
+            raise DomainError('INVALID_PAYLOAD', f'naskah.beats[{index}].id')
+        refs = beat.get('fact_refs')
+        if not isinstance(refs, list) or not refs:
+            raise DomainError('FACT_REFS', f"{beat['id']} has no fact_refs")
+        unknown = [ref for ref in refs if ref not in known]
+        if unknown:
+            raise DomainError('FACT_REFS', f"{beat['id']} cites unknown source {unknown[0]}")
+        beats[beat['id']] = refs
+    for index, item in enumerate(cue['cues']):
+        if not isinstance(item, dict) or item.get('beat') not in beats:
+            raise DomainError('INVALID_PAYLOAD', f'cue.cues[{index}].beat')
+
+
 def _artifact(store, job, artifact):
     row = next((a for a in store.get(job)['artifacts'] if a['id'] == artifact), None)
     if not row:
@@ -238,6 +330,11 @@ def _job(store, action, payload):
         'revise': (('job_id', 'rev'), ('patch', 'import_voice')),
         'annotate': (('job_id', 'rev', 't_ms', 'text'), ('cue_id',)),
         'approve': (('job_id', 'rev', 'stage', 'artifact_id'), ()),
+        'set_brief': (('job_id', 'rev', 'patch'), ()),
+        'research': (('job_id', 'rev', 'sources'), ()),
+        'write_naskah': (('job_id', 'rev', 'naskah', 'cue'), ()),
+        'import_naskah': (('job_id', 'rev', 'naskah', 'cue'), ('origin',)),
+        'select_style': (('job_id', 'rev', 'style_id'), ()),
     }.get(action)
     if shape is None:
         raise DomainError('INVALID_ACTION', 'unsupported job operation')
@@ -249,6 +346,11 @@ def _job(store, action, payload):
         return store.create(brief)
     job = _identifier(payload['job_id'])
     current = store.get(job)
+    if action in _STAGE_ROUTES:
+        allowed, target = _STAGE_ROUTES[action]
+        if current['stage'] not in allowed:
+            raise DomainError('STAGE_ORDER', f"{action} requires {allowed[0]}..{allowed[-1]} (at {current['stage']})")
+        return _stage_action(store, job, payload['rev'], action, target, payload)
     if action == 'get':
         reconcile(store, job)
         data = store.get(job)
@@ -266,7 +368,7 @@ def _job(store, action, payload):
     if action == 'approve':
         artifact = _identifier(payload['artifact_id'])
         stage = payload['stage']
-        if stage not in ('script_style', 'preview'):
+        if stage not in STAGE_KIND:
             raise DomainError('INVALID_APPROVAL', 'unknown approval stage')
         _artifact(store, job, artifact)
         _authorization(f'UMP APPROVE {job} {rev} {stage} {artifact}', 'EXPLICIT_APPROVAL_REQUIRED')
@@ -331,10 +433,10 @@ _identifier_type = {'type': 'string', 'pattern': '^[A-Za-z0-9_-]{16}$'}
 SCHEMAS = {
     'ump_styles': _schema('List UMP style presets and their renderability.', {}),
     'ump_job': _schema('Create, read, revise, annotate or record explicit UMP approval. Load ump:motion-pipeline.', {
-        'action': {'type': 'string', 'enum': ['create', 'get', 'revise', 'annotate', 'approve']},
-        'payload': {'type': 'object', 'description': 'create: brief; get: job_id [run_id]; revise: job_id, rev, patch and/or import_voice; annotate: job_id, rev, t_ms, text [cue_id]; approve: job_id, rev, stage, artifact_id. Never pass file paths.'},
+        'action': {'type': 'string', 'enum': ['create', 'get', 'set_brief', 'research', 'write_naskah', 'import_naskah', 'select_style', 'revise', 'annotate', 'approve']},
+        'payload': {'type': 'object', 'description': 'create: brief; get: job_id [run_id]; set_brief: job_id, rev, patch.brief; research: job_id, rev, sources; write_naskah: job_id, rev, naskah, cue; import_naskah: same plus origin="imported"; select_style: job_id, rev, style_id; revise: job_id, rev, patch and/or import_voice; annotate: job_id, rev, t_ms, text [cue_id]; approve: job_id, rev, stage, artifact_id. Never pass file paths.'},
     }),
-    'ump_render': _schema('Start a nonblocking render for the specified job revision.', {
+    'ump_render': _schema('Start a nonblocking run for the specified job revision: a document snapshot (brief, research, naskah, style_decision) or a render (style_frame, preview, final).', {
         'job_id': _identifier_type, 'rev': {'type': 'integer', 'minimum': 1},
         'target': {'type': 'string', 'enum': list(MEDIA)},
     }),
