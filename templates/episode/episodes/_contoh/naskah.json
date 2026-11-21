@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "episode": "_contoh",
+  "language": "id",
+  "voice": {
+    "engine": "edge",
+    "name": "id-ID-GadisNeural",
+    "rate": "+0%"
+  },
+  "target_duration_s": { "min": 20, "max": 40 },
+  "beats": [
+    {
+      "id": "b001",
+      "narration": "Kotak kecil ini menyimpan satu ide besar.",
+      "purpose": "hook — klaim yang bikin berhenti scroll, tanpa menyebut merek",
+      "on_screen_text": "SATU IDE BESAR",
+      "fact_refs": [],
+      "estimated_s": 3.5
+    },
+    {
+      "id": "b002",
+      "narration": "Tapi gagalnya bukan karena idenya, karena tidak pernah dijelaskan.",
+      "purpose": "konteks — masalah yang pembaca kenali sendiri",
+      "on_screen_text": "BUKAN IDE SESULUT ITU",
+      "fact_refs": ["s1"],
+      "estimated_s": 5
+    },
+    {
+      "id": "b003",
+      "narration": "Satu gambar bisa menjelaskan apa yang tiga paragraf gagal.",
+      "purpose": "payoff — janji workflow ini",
+      "on_screen_text": "SATU GAMBAR, SATU JANJI",
+      "fact_refs": ["s1"],
+      "estimated_s": 5
+    }
+  ],
+  "sources": [
+    {
+      "id": "s1",
+      "title": "Contoh kartu sumber — ganti dengan sumber sungguhan sebelum render",
+      "url": "https://example.org/sumber",
+      "publisher": "Contoh",
+      "accessed": "2026-11-21"
+    }
+  ]
+}

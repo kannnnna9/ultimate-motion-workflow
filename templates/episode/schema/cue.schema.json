@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/kannnnna9/ultimate-motion-workflow/templates/episode/schema/cue.schema.json",
+  "title": "Episode cue sheet",
+  "description": "Satu cue menggerakkan aksi visual DAN SFX. Menggeser t_ms menggeser keduanya; file ini tidak boleh punya waktu khusus SFX yang terpisah dari aksi.",
+  "type": "object",
+  "required": ["version", "episode", "fps", "cues"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "episode": { "type": "string", "minLength": 1 },
+    "fps": { "const": 30 },
+    "cues": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "t_ms", "beat", "action"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^c[0-9]{3}$", "description": "c001, c002, ... berurutan naik t_ms" },
+          "t_ms": { "type": "integer", "minimum": 0, "description": "Satu-satunya sumber waktu. Aksi dan SFX sama-sama membaca nilai ini." },
+          "beat": { "type": "string", "pattern": "^b[0-9]{3}$" },
+          "action": {
+            "type": "object",
+            "required": ["type", "target"],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "enum": ["reveal", "move", "fold", "cut", "scale", "fade", "hold"],
+                "description": "Jenis perubahan visual. 'reveal' = elemen muncul, 'hold' = tahan tanpa gerak."
+              },
+              "target": { "type": "string", "minLength": 1, "description": "Nama elemen di komposisi." },
+              "params": { "type": "object", "additionalProperties": true }
+            }
+          },
+          "sfx": {
+            "type": ["object", "null"],
+            "description": "Oleh-oleh bunyi untuk cue ini. null = tanpa SFX. Bila ada, waktu selalu = t_ms + offset_frames.",
+            "required": ["name", "offset_frames"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "offset_frames": { "type": "integer", "minimum": -2, "maximum": 2, "default": 1, "description": "Offset frame dari t_ms; default 1 (bunyi mendarat satu frame setelah aksi terlihat)." },
+              "gain_db": { "type": "number", "minimum": -60, "maximum": 6, "default": -6 }
+            }
+          },
+          "transition": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": { "enum": ["fold", "wipe", "cut", "none"] },
+              "duration_ms": { "type": "integer", "minimum": 0, "maximum": 2000 }
+            }
+          }
+        }
+      }
+    },
+    "audio_beds": {
+      "type": "array",
+      "description": "Musik/ambience per rentang beat. Semua track berhenti paling lambat di awal kartu sumber.",
+      "items": {
+        "type": "object",
+        "required": ["name", "from_beat", "to_beat"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "file": { "type": "string" },
+          "from_beat": { "type": "string", "pattern": "^b[0-9]{3}$" },
+          "to_beat": { "type": "string", "pattern": "^b[0-9]{3}$" },
+          "gain_db": { "type": "number", "minimum": -60, "maximum": 0, "default": -20 },
+          "license": { "type": "string" }
+        }
+      },
+      "default": []
+    },
+    "end_card": {
+      "type": "object",
+      "required": ["start_beat", "hold_s"],
+      "additionalProperties": false,
+      "properties": {
+        "start_beat": { "type": "string", "pattern": "^b[0-9]{3}$" },
+        "hold_s": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

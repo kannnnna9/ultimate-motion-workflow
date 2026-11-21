@@ -1,0 +1,54 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+.ultra/
+
+# Dependency
+node_modules/
+.npm/
+.pnpm-store/
+
+# Secret & konfigurasi lokal
+.env
+.env.*
+!.env.example
+
+# Cache
+.cache/
+cache/
+*.cache
+hyperframes-cache/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Artefak tool (berisi path absolut, tidak portabel)
+.hyperframes/
+work/
+
+# Render & media besar
+out/
+render/
+*.mp4
+*.mov
+*.webm
+*.wav
+*.m4a
+*.png
+*.jpg
+*.jpeg
+
+# Audio episode: VO dan bed kecil ikut repo supaya render ulang tanpa jaringan.
+!demo/**/assets/audio/*.mp3
+!demo/**/assets/audio/*.wav
+!demo/**/work/captions.json
+!demo/**/work/captions.ass
+
+# Vendor: histori git upstream tidak ikut
+.git/
+.gitattributes
+.github/

@@ -6,11 +6,11 @@ Repo ini menyimpan keputusan editorial, template episode dan tooling dalam satu 
 
 ## Status
 
-**Desain v1 disetujui. Implementasi belum dimulai.**
+- **Status:** M1–M6 selesai lokal; branch belum dipush. Desain v1 disetujui. C1–C4 masih menunggu keputusan operator.
 
-Yang ada sekarang: dokumen desain, roadmap, changelog. Yang belum ada: `scripts/`, `templates/`, `demo/`, skill Hermes, `LICENSE`, `THIRD_PARTY_NOTICES.md`. Urutan pengerjaan ada di [ROADMAP.md](ROADMAP.md) bagian B.
+Yang ada sekarang: dokumen desain, roadmap, changelog, `LICENSE` MIT, `THIRD_PARTY_NOTICES.md`, Bang Motion yang di-vendor di `vendor/bang-motion/` (6 file, 152 KB), `.env.example`, dan folder kosong `templates/episode/`, `scripts/`, `demo/`, `skills/`. Yang belum ada: isi template, script, skill Hermes, demo. Urutan pengerjaan ada di [ROADMAP.md](ROADMAP.md) bagian B.
 
-Selama implementasi belum jalan, belum ada perintah untuk dijalankan. Petunjuk eksekusi ditambahkan setelah alur berhasil dijalankan dari clone bersih.
+Selama M2–M6 belum jalan, belum ada perintah untuk dijalankan. Petunjuk eksekusi ditambahkan setelah alur berhasil dijalankan dari clone bersih.
 
 ## Prasyarat
 
@@ -35,6 +35,11 @@ Target Linux dengan Hermes, Node/npm, Chrome, FFmpeg/ffprobe dan Python/uv. Hype
 
 - **[ROADMAP.md](ROADMAP.md)** — apa yang sudah diputuskan, apa yang masih menunggu keputusan, dan urutan milestone v1.
 - **[CHANGELOG.md](CHANGELOG.md)** — perubahan per versi.
+- **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)** — enam sumber rujukan, commit yang diaudit, dan lisensinya.
+- `styles/registry.json` — katalog preset style yang bisa dipilih per episode.
+- `styles/<id>/STYLE.md` — kontrak visual, gerak, copy, dan checklist preset.
+- `skills/motion-pipeline/SKILL.md` — alur Hermes dari pilihan style sampai render dan review.
 - **[desain v1](docs/ultra/specs/2026-11-21-ultimate-motion-workflow-design.md)** — spesifikasi dan kriteria penerimaan.
 
-Lima repo rujukan (Reanimate, LottieFiles motion-design-skill, MG Styles 15, Huashu Art Motion, Anidoodle) **belum** di-vendor ke repo ini. Daftar commit, lisensi, dan batasan ukuran ada di [ROADMAP.md](ROADMAP.md) bagian E.
+Bang Motion (commit `c1aa65e`, MIT © 2026 Bang Tutorial) di-vendor di [`vendor/bang-motion/`](vendor/bang-motion/): `SKILL.md` dan empat referensi (`explainer`, `anti-ppt`, `techniques`, `architecture`) plus lisensinya. Empat repo rujukan lain (Reanimate, LottieFiles motion-design-skill, MG Styles 15, Huashu Art Motion, Anidoodle) **tidak** di-vendor — daftar commit, lisensi, dan batasan ukuran ada di [ROADMAP.md](ROADMAP.md) bagian E.
+

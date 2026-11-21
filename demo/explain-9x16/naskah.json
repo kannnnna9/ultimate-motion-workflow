@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "episode": "explain-9x16",
+  "language": "id",
+  "voice": {
+    "engine": "edge",
+    "name": "id-ID-ArdiNeural",
+    "rate": "+0%"
+  },
+  "target_duration_s": {
+    "min": 12,
+    "max": 18
+  },
+  "beats": [
+    {
+      "id": "b001",
+      "narration": "Video yang berhenti di detik pertama, biasanya bukan karena idenya buruk.",
+      "purpose": "hook",
+      "on_screen_text": "BERHENTI DULU",
+      "fact_refs": [],
+      "estimated_s": 5
+    },
+    {
+      "id": "b002",
+      "narration": "Tapi karena penonton harus menebak apa yang sedang mereka lihat.",
+      "purpose": "konteks",
+      "on_screen_text": "MESTI TEBAK?",
+      "fact_refs": [],
+      "estimated_s": 5
+    },
+    {
+      "id": "b003",
+      "narration": "Satu gerakan jelas lebih kuat daripada sepuluh kartu yang berganti.",
+      "purpose": "payoff",
+      "on_screen_text": "SATU GERAKAN",
+      "fact_refs": [
+        "s1"
+      ],
+      "estimated_s": 5
+    }
+  ],
+  "sources": [
+    {
+      "id": "s1",
+      "title": "Bang Motion — anti-ppt dan blocking kamera",
+      "url": "https://github.com/bangtutorial/bang-motion",
+      "publisher": "Bang Tutorial",
+      "accessed": "2026-11-21"
+    }
+  ]
+}

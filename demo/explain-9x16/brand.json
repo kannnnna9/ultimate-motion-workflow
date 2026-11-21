@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "episode": "explain-9x16",
+  "style_id": "dark-editorial",
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "codec": "h264",
+    "audio_codec": "aac",
+    "pixel_aspect": "1:1",
+    "color_space": "bt709"
+  },
+  "palette": {
+    "ground": "#101A22",
+    "ink": "#F2EFE6",
+    "accent": "#FF7A45",
+    "secondary": "#4FB3A9",
+    "coverage": {
+      "ground": 58,
+      "ink": 22,
+      "secondary": 12,
+      "accent": 8
+    }
+  },
+  "typography": {
+    "display": {
+      "family": "DejaVu Sans",
+      "weight": 700,
+      "size_px": 92,
+      "line_height": 1.08
+    },
+    "body": {
+      "family": "DejaVu Sans Mono",
+      "weight": 400,
+      "size_px": 46,
+      "line_height": 1.35
+    },
+    "captions": {
+      "family": "DejaVu Sans",
+      "weight": 700,
+      "size_px": 58,
+      "line_height": 1.2
+    }
+  },
+  "safe_area": {
+    "x": 110,
+    "y": 330,
+    "width": 860,
+    "height": 940
+  },
+  "rules": {
+    "max_words_per_line": 4,
+    "min_credit_px": 34,
+    "min_motion_change_s": 1,
+    "max_motion_change_s": 2,
+    "end_card_hold_s": 6,
+    "min_contrast_ratio": 4.5
+  },
+  "fonts": [],
+  "banned": [
+    "static slide cards",
+    "repeated scene-title frames",
+    "pill labels",
+    "dotted progress bars",
+    "generic floating icons",
+    "full-screen fade or slide-up entrances",
+    "random particles",
+    "CSS image filters",
+    "microtext below 30 px",
+    "any sound over the final source card"
+  ]
+}

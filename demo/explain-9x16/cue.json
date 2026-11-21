@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "episode": "explain-9x16",
+  "fps": 30,
+  "cues": [
+    {
+      "id": "c001",
+      "t_ms": 110,
+      "beat": "b001",
+      "action": {
+        "type": "reveal",
+        "target": "hero-title",
+        "params": {
+          "from": "mask"
+        }
+      },
+      "sfx": null
+    },
+    {
+      "id": "c002",
+      "t_ms": 1000,
+      "beat": "b001",
+      "action": {
+        "type": "move",
+        "target": "ring",
+        "params": {
+          "to": "expand",
+          "ease": "power2.out"
+        }
+      },
+      "sfx": {
+        "name": "whoosh",
+        "offset_frames": 1,
+        "gain_db": -10
+      }
+    },
+    {
+      "id": "c003",
+      "t_ms": 2600,
+      "beat": "b001",
+      "action": {
+        "type": "cut",
+        "target": "hero-title"
+      },
+      "sfx": null
+    },
+    {
+      "id": "c004",
+      "t_ms": 4760,
+      "beat": "b002",
+      "action": {
+        "type": "reveal",
+        "target": "guess-block",
+        "params": {
+          "from": "fold"
+        }
+      },
+      "sfx": {
+        "name": "paper",
+        "offset_frames": 1,
+        "gain_db": -12
+      }
+    },
+    {
+      "id": "c005",
+      "t_ms": 5900,
+      "beat": "b002",
+      "action": {
+        "type": "move",
+        "target": "guess-block",
+        "params": {
+          "to": "scatter",
+          "ease": "power3.inOut"
+        }
+      },
+      "sfx": {
+        "name": "rustle",
+        "offset_frames": 1,
+        "gain_db": -14
+      }
+    },
+    {
+      "id": "c006",
+      "t_ms": 7600,
+      "beat": "b002",
+      "action": {
+        "type": "fold",
+        "target": "guess-block",
+        "params": {
+          "into": "edge"
+        }
+      },
+      "sfx": {
+        "name": "paper",
+        "offset_frames": 1,
+        "gain_db": -12
+      }
+    },
+    {
+      "id": "c007",
+      "t_ms": 8560,
+      "beat": "b003",
+      "action": {
+        "type": "scale",
+        "target": "one-move",
+        "params": {
+          "factor": 1.0,
+          "ease": "power2.out"
+        }
+      },
+      "sfx": {
+        "name": "whoosh",
+        "offset_frames": 1,
+        "gain_db": -10
+      }
+    },
+    {
+      "id": "c008",
+      "t_ms": 10200,
+      "beat": "b003",
+      "action": {
+        "type": "reveal",
+        "target": "path-line",
+        "params": {
+          "from": "mask"
+        }
+      },
+      "sfx": {
+        "name": "paper",
+        "offset_frames": 1,
+        "gain_db": -12
+      }
+    }
+  ],
+  "audio_beds": [
+    {
+      "name": "bed-demo",
+      "file": "assets/audio/bed.mp3",
+      "from_beat": "b001",
+      "to_beat": "b003",
+      "gain_db": -18,
+      "license": "dibuat sendiri untuk demo (sintesis lokal), bebas dipakai"
+    }
+  ],
+  "end_card": {
+    "start_beat": "b003",
+    "hold_s": 6
+  }
+}

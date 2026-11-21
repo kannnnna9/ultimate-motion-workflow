@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "episode": "_contoh",
+  "fps": 30,
+  "cues": [
+    {
+      "id": "c001",
+      "t_ms": 0,
+      "beat": "b001",
+      "action": { "type": "hold", "target": "hero-card" },
+      "sfx": null,
+      "transition": { "type": "none", "duration_ms": 0 }
+    },
+    {
+      "id": "c002",
+      "t_ms": 1200,
+      "beat": "b001",
+      "action": { "type": "reveal", "target": "hook-label", "params": { "from": "fold" } },
+      "sfx": { "name": "paper-fold-a", "offset_frames": 1, "gain_db": -6 },
+      "transition": { "type": "fold", "duration_ms": 400 }
+    },
+    {
+      "id": "c003",
+      "t_ms": 3500,
+      "beat": "b002",
+      "action": { "type": "move", "target": "hero-card", "params": { "to": "left", "ease": "power2.out" } },
+      "sfx": { "name": "paper-slide", "offset_frames": 1, "gain_db": -8 }
+    },
+    {
+      "id": "c004",
+      "t_ms": 5000,
+      "beat": "b002",
+      "action": { "type": "reveal", "target": "problem-text" },
+      "sfx": { "name": "paper-fold-b", "offset_frames": 1, "gain_db": -6 }
+    },
+    {
+      "id": "c005",
+      "t_ms": 8500,
+      "beat": "b003",
+      "action": { "type": "fold", "target": "problem-text", "params": { "into": "frame" } },
+      "sfx": { "name": "paper-fold-a", "offset_frames": 1, "gain_db": -6 }
+    },
+    {
+      "id": "c006",
+      "t_ms": 10000,
+      "beat": "b003",
+      "action": { "type": "reveal", "target": "promise-card" },
+      "sfx": { "name": "leaf-rustle", "offset_frames": 1, "gain_db": -10 }
+    }
+  ],
+  "audio_beds": [
+    {
+      "name": "bed-contoh",
+      "file": "assets/audio/bed.mp3",
+      "from_beat": "b001",
+      "to_beat": "b003",
+      "gain_db": -20,
+      "license": "ganti dengan lisensi track sungguhan"
+    }
+  ],
+  "end_card": { "start_beat": "b003", "hold_s": 8 }
+}
