@@ -45,7 +45,7 @@ Bagian dari v1.0, tapi belum ada satu pun yang selesai.
 
 | # | Milestone | Bukti selesai |
 |---|---|---|
-| M1 | Struktur repo + `LICENSE` (MIT) + `THIRD_PARTY_NOTICES.md` | File ada, lisensi upstream tercatat |
+| M1 | Struktur repo + `LICENSE` (MIT) + `THIRD_PARTY_NOTICES.md` + vendor Bang Motion | File ada, lisensi keenam sumber tercatat, `references/` Bang Motion masuk repo |
 | M2 | `templates/episode/` — brand sheet, naskah, cue, struktur folder | Template bisa dipakai untuk satu episode |
 | M3 | `scripts/` — setup, check, render, caption (dependency di-pinn) | `setup` jalan dari clean clone |
 | M4 | `skills/motion-pipeline/SKILL.md` — skill Hermes | Skill termuat, memandu alur satu episode |
@@ -85,7 +85,7 @@ Empat arah berikut **belum diputuskan**. Jangan dikerjakan sampai ada jawaban ek
 
 ---
 
-## D. Keputusan teknis yang belum diambil
+### D. Keputusan teknis yang belum diambil
 
 Bukan roadmap, tapi menghambat M1–M5. Di spec disebut "ditinggal ke builder", artinya operator belum menetapkan.
 
@@ -93,27 +93,34 @@ Bukan roadmap, tapi menghambat M1–M5. Di spec disebut "ditinggal ke builder", 
 - Penamaan script dan parameter CLI.
 - Struktur detail folder episode.
 - Urutan check di dalam `scripts/check` (lint → snapshot → audio probe).
-- Status Bang Motion dalam workflow: pegangan desain saja, atau bagian resmi dari skill.
+
+**Sudah ditetapkan:** Bang Motion dipakai sebagai sumber pegangan desain resmi (lihat E), bukan sekadar skill lepas.
 
 ---
 
-## E. Referensi eksternal — belum di-vendor
+## E. Referensi eksternal
 
-Lima repo dan tutorial Threads **belum ada di dalam repo** dan belum di-clone ke disk. Commit yang di-audit 2026-11-21:
+**Bang Motion sudah di-clone penuh dan siap di-vendor.** Lima repo lain **belum ada di dalam repo** dan belum di-clone ke disk. Commit yang di-audit 2026-11-21:
 
-| Sumber | Commit | Lisensi | Peran |
-|---|---|---|---|
-| [Reanimate](https://github.com/NiazMorshed2007/reanimate) | `3f7a55a` | MIT | Bedah animasi frame-by-frame (C2) |
-| [LottieFiles motion-design-skill](https://github.com/LottieFiles/motion-design-skill) | `d77a9fc` | MIT | Checklist koreografi: primary/secondary/ambient, easing, stagger |
-| [MG Styles 15](https://github.com/Vincentwei1021/mg-styles-15) | `8fab7eb` | — | Kartu gaya + pola cue bersama untuk aksi dan SFX |
-| [Huashu Art Motion](https://github.com/alchaincyf/huashu-art-motion) | `a97c450` | MIT | Setujui style frame dulu, petakan beat narasi ke aksi |
-| [Anidoodle](https://github.com/alexgreensh/anidoodle) | `4ae27d2` | — | Ilustrasi procedural deterministik (parameter + seed) |
+| Sumber | Commit | Lisensi | Ukuran | Peran |
+|---|---|---|---|---|
+| [Bang Motion](https://github.com/bangtutorial/bang-motion) | `c1aa65e` (v1.19.0) | MIT — © 2026 Bang Tutorial | 4,5 MB | **Pegangan desain resmi.** `references/explainer.md` (579 baris) untuk explainer kartun + VO; `anti-ppt.md` (110) anti-slideshow; `techniques.md` (690); `architecture.md` (188) |
+| [Reanimate](https://github.com/NiazMorshed2007/reanimate) | `3f7a55a` | MIT | ±60 MB | Bedah animasi frame-by-frame (C2) |
+| [LottieFiles motion-design-skill](https://github.com/LottieFiles/motion-design-skill) | `d77a9fc` | MIT | kecil | Checklist koreografi: primary/secondary/ambient, easing, stagger |
+| [MG Styles 15](https://github.com/Vincentwei1021/mg-styles-15) | `8fab7eb` | — | ±568 MB | Kartu gaya + pola cue bersama untuk aksi dan SFX |
+| [Huashu Art Motion](https://github.com/alchaincyf/huashu-art-motion) | `a97c450` | MIT | ±78 MB | Setujui style frame dulu, petakan beat narasi ke aksi |
+| [Anidoodle](https://github.com/alexgreensh/anidoodle) | `4ae27d2` | — | ±49 MB | Ilustrasi procedural deterministik (parameter + seed) |
 
-**Catatan ukuran:** repo-nya besar (mg-styles-15 ±568 MB, huashu ±78 MB, reanimate ±60 MB, anidoodle ±49 MB). Disk bebas hanya 7,7 GiB. Jangan clone penuh — ambil hanya `SKILL.md` dan `references/` yang relevan, catat commit di `THIRD_PARTY_NOTICES.md`.
+Clone Bang Motion tersedia di dua tempat:
+
+- `~/.hermes/cache/scratch/bang-motion` — full git clone, ada `.git`
+- `~/.hermes/skills/creative/bang-motion` — salinan terpasang sebagai skill Hermes
+
+Saat vendor, ambil `SKILL.md`, `references/explainer.md`, `references/anti-ppt.md`, `references/techniques.md`, `references/architecture.md`, dan `LICENSE`. Jangan bawa `icon.png` (178 KB) ke dalam repo workflow.
+
+**Catatan ukuran:** sisa repo besar (mg-styles-15 ±568 MB, huashu ±78 MB, reanimate ±60 MB, anidoodle ±49 MB). Disk bebas hanya 7,6 GiB. Jangan clone penuh — ambil hanya `SKILL.md` dan `references/` yang relevan, catat commit di `THIRD_PARTY_NOTICES.md`.
 
 Tutorial Threads Part 1–4 hanya tersedia sebagai ringkasan (brand sheet → naskah → VO → caption → rencana scene → preview → revisi timestamp → render), bukan file sumber.
-
-**Bang Motion** sudah terpasang sebagai skill `bang-motion` di `~/.hermes/skills/creative/` — pegangan anti-slideshow dan blocking kamera. Statusnya di repo workflow belum ditetapkan (lihat D).
 
 ---
 
