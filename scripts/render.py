@@ -96,9 +96,17 @@ def validate_output(info: dict, brand: dict) -> list[str]:
     return problems
 
 
-def build_mux_command(frames: Path, vo: Path, ass: Path, final: Path, *, preview: bool, video_duration: float, bed: Path | None = None) -> list[str]:
+def build_mux_command(frames: Path, vo: Path, ass: Path, final: Path, *, preview: bool, video_duration: float, bed: Path | None = None, captions: bool | None = None) -> list[str]:
+    """Mux the frames with the voice-over.
+
+    `captions=None` (the default) burns the ASS subtitles in. A style that draws its
+    own caption bar sets `captions=False`: two layers of the same spoken line stack
+    on top of each other and neither is readable.
+    """
     audio_inputs = ["-i", str(vo)]
-    video_filter = f"[0:v]ass={ass.as_posix()}"
+    if captions is None:
+        captions = True
+    video_filter = f"[0:v]ass={ass.as_posix()}" if captions else "[0:v]null"
     if preview:
         video_filter += ",scale=540:960"
     filter_parts = [f"{video_filter}[v0]"]
@@ -137,6 +145,11 @@ def main(argv: list[str]) -> int:
     brand = json.loads((ep / "brand.json").read_text(encoding="utf-8"))
     style_id = args.style or brand.get("style_id")
     entry_name = "index.html"
+    preset_doc = None
+    try:
+        preset_doc = json.loads((ROOT / "styles" / style_id / "preset.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        preset_doc = None
     if args.project:
         project = args.project.expanduser().resolve()
     else:
@@ -192,7 +205,11 @@ def main(argv: list[str]) -> int:
     video_s = float(probe(frames)["format"]["duration"])
     suffix = "-preview" if args.preview else ""
     final = out_dir / f"{ep.name}{suffix}.mp4"
-    cmd = build_mux_command(frames, vo, ass, final, preview=args.preview, video_duration=video_s, bed=bed)
+    # a style that renders its own caption bar sets draws_captions in its preset:
+    # burning the ASS on top of it puts the spoken line on screen twice
+    draws_own = bool((preset_doc or {}).get("draws_captions"))
+    cmd = build_mux_command(frames, vo, ass, final, preview=args.preview, video_duration=video_s, bed=bed,
+                            captions=False if draws_own else None)
     if args.preview:
         print("CATATAN: preview=540x960, validasi resolusi dilewati (bukan master)")
     sh(cmd)

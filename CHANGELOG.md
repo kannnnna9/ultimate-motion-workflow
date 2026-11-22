@@ -2,6 +2,21 @@
 
 Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) dan [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Preset `halftone-dossier`: berkas arsip cetak — kertas krem, halftone dua lapis dengan sudut layar 30°/15°, headline serif berat dengan bayangan misregister, stempel yang menghantam, dan lima plate exhibit. Port dari spesifikasi `lemo-opuscar/styles/halftone-dossier/STYLE.md` (CC-BY-NC-4.0, hanya spesifikasi dan rumus; tidak ada kode yang disalin).
+- Field preset `draws_captions`: style yang menggambar caption bar sendiri menandainya `true`, dan `scripts/render.py` berhenti membakar subtitle ASS di atasnya. Tanpa ini baris yang sama muncul dua kali dan tidak ada yang terbaca.
+
+### Changed
+- `halftone-dossier` memakai model waktu, bukan tween: `window.__umpRender(t)` menghitung setiap frame dari `t`, sehingga tidak bisa "berhenti menunggu tween selesai" seperti animasi slide.
+- Line boil: `feTurbulence` dengan seed `1 + floor(t*10) % 40`, jadi gambar digambar ulang ~10x/detik dan garis tepi bernapas. Diterapkan ke kartu dan plate saja, tidak pernah ke teks.
+- Per-glyph headline: tiap huruf jatuh, mengempis dengan volume terjaga (`scale(1/sq, sq)`), lalu memantul.
+- Grain per-frame: bintik kertas dan tinta di-seed ulang setiap dua frame, jadi tidak ada dua frame yang identik.
+
+### Fixed
+- `scripts/render.py` membaca `draws_captions` dari `styles/<style_id>/preset.json`; `style_id` diambil dari `brand.json` atau `--style`. Saat merender proyek dari `--project`, style yang dibangunkan bisa berbeda dari `brand.json`, jadi `--style` harus disebut eksplisit.
+
 ## [1.3.0] - 2026-11-22
 
 ### Changed

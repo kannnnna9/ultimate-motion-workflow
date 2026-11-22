@@ -1,0 +1,47 @@
+{
+  "id": "halftone-dossier",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": [
+    "assets/gsap.min.js"
+  ],
+  "palette": {
+    "ground": "#F2E6D0",
+    "ink": "#1A1A2E",
+    "accent": "#E23744",
+    "secondary": "#F2C14E",
+    "overprint": "#2E4DA7"
+  },
+  "typography": {
+    "display": "Georgia, 'Times New Roman', serif",
+    "body": "Helvetica, Arial, sans-serif",
+    "mono": "'Courier New', monospace",
+    "headline_px": 132,
+    "body_px": 46,
+    "tracking": "0.01em"
+  },
+  "layout": {
+    "margin": 96,
+    "hud_top": 120,
+    "headline_y": 620,
+    "exhibit_y": 900
+  },
+  "motion": {
+    "enter_ease": "back.out(2.2)",
+    "enter_duration": 0.42,
+    "stagger": 0.06,
+    "stamp_duration": 0.09,
+    "wipe_duration": 0.44,
+    "grain_reseed_frames": 2
+  },
+  "caption_safe_area": {
+    "x": 110,
+    "y": 1420,
+    "width": 860,
+    "height": 280
+  },
+  "sources": [
+    "lemo-opuscar styles/halftone-dossier/STYLE.md (CC-BY-NC-4.0, spec only)"
+  ],
+  "draws_captions": true
+}
