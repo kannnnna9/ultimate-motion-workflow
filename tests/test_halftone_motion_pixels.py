@@ -17,7 +17,10 @@ import subprocess
 import unittest
 from pathlib import Path
 
-import numpy as np
+try:
+    import numpy as np
+except ModuleNotFoundError:  # visual lane reports a skip when its dependency is absent
+    np = None
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSITION = ROOT / "styles" / "halftone-dossier" / "ump.html"
@@ -38,7 +41,7 @@ def _browser_env():
     return os.environ.copy()
 
 
-@unittest.skipUnless(os.environ.get("UMP_BROWSER"), "set UMP_BROWSER=1 to render")
+@unittest.skipUnless(os.environ.get("UMP_BROWSER") and np is not None, "set UMP_BROWSER=1 and install numpy to render")
 class PlateMotionFromPixels(unittest.TestCase):
     """Render two moments per beat and require the drawing to differ."""
 

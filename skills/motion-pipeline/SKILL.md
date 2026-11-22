@@ -76,14 +76,7 @@ Bentuk `UMP APPROVE <job_id> <rev> <stage> <artifact_id>` tetap berlaku untuk op
 
 Style dipilih di `research_approved`, sebelum naskah: begitu register visualnya ditentukan, naskah ditulis untuk mengisinya. Memilih style belakangan memaksa penulis menebak tampilan lalu menambal naskah. Baca `styles/registry.json`, lalu buka `styles/<style-id>/STYLE.md`.
 
-Preset yang tersedia:
-
-- `dark-editorial` — ready; komposisi `demo/hyperframes/index.html`
-- `kinetic-bold` — ready; komposisi `styles/kinetic-bold/index.html`
-- `botanical-paper` — spec
-- `minimal-explainer` — ready; komposisi `styles/minimal-explainer/ump.html`
-
-Style **spec** adalah kontrak desain yang belum punya komposisi demo siap-render. Jangan mengklaim style itu ready sebelum ada komposisi, snapshot, dan render yang lulus.
+Daftar preset tidak ditulis ulang di skill ini. Panggil `ump_styles`, lalu tawarkan hanya item dengan `renderable: true`; status dan jumlah diambil dari `styles/registry.json`. Style **spec** adalah kontrak desain yang belum punya komposisi demo siap-render. Jangan mengklaim style itu ready sebelum ada komposisi, snapshot, dan render yang lulus.
 
 Tuliskan pilihan di `brand.json`:
 
