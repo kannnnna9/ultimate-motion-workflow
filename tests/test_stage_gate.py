@@ -97,7 +97,7 @@ class StageGateTests(unittest.TestCase):
 
     def test_claim_requires_matching_stage(self):
         job_id = self.store.create("topik")["job_id"]
-        for target, needed in (("style_frame", "style_approved"), ("preview", "style_frame"), ("final", "preview")):
+        for target, needed in (("style_frame", "naskah_approved"), ("preview", "style_frame"), ("final", "final_ready")):
             with self.assertRaisesRegex(DomainError, "STAGE_ORDER"):
                 self.store.claim(job_id, 1, target)
         self.assertEqual(self.store.stage_of(job_id), "intake")
@@ -115,8 +115,13 @@ class StageGateTests(unittest.TestCase):
 
     def test_import_naskah_lands_in_draft_with_imported_origin(self):
         job_id = self.store.create("topik")["job_id"]
-        # An imported script still needs its own provenance.
+        self.store.advance(job_id, 1, "set_brief", expect="intake", to="brief_draft")
+        self.store.advance(job_id, 1, "approve", expect="brief_draft", to="brief_approved")
+        self.store.advance(job_id, 1, "research", expect="brief_approved", to="research_draft")
         self.store.revise(job_id, 1, {"sources": [{"id": "s1", "url": "https://example.com/a"}]})
+        rev = self.store.get(job_id)["rev"]
+        self.store.advance(job_id, rev, "approve", expect="research_draft", to="research_approved")
+        self.store.advance(job_id, rev, "select_style", expect="research_approved", to="style_approved")
         rev = self.store.get(job_id)["rev"]
         self._call("import_naskah", job_id=job_id, rev=rev,
                    naskah={"beats": [{"id": "b1", "fact_refs": ["s1"]}]},
@@ -139,7 +144,9 @@ class StageGateTests(unittest.TestCase):
         self.store.advance(job_id, 1, "approve", expect="brief_draft", to="brief_approved")
         self.store.advance(job_id, 1, "research", expect="brief_approved", to="research_draft")
         self.store.advance(job_id, 1, "approve", expect="research_draft", to="research_approved")
-        self.store.advance(job_id, 1, "write_naskah", expect="research_approved", to="naskah_draft")
+        self.store.advance(job_id, 1, "select_style", expect="research_approved", to="style_approved")
+        self.store.advance(job_id, 1, "write_naskah", expect="style_approved", to="naskah_draft")
+        self.store.advance(job_id, 1, "approve", expect="naskah_draft", to="naskah_approved")
         rev = self.store.get(job_id)["rev"]
         with self.assertRaisesRegex(DomainError, "STAGE_ORDER"):
             self._call("import_naskah", job_id=job_id, rev=rev, naskah={"beats": []}, cue={"cues": []})

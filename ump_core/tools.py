@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from .jobs import STAGE_KIND, DomainError, JobStore
-from .worker import FIXTURES, ID, MEDIA, ROOT, _valid_words, episode_docs, owned, reconcile, submit
+from .worker import FIXTURES, ID, MEDIA, ROOT, _valid_words, episode_docs, owned, reconcile, submit, execute_run
 
 _APPROVAL = re.compile(
     r'UMP APPROVE ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8}) '
@@ -63,7 +63,7 @@ _STAGE_ROUTES = {
     'research': (('brief_approved',), 'research_draft'),
     'select_style': (('research_approved',), 'style_approved'),
     'write_naskah': (('style_approved',), 'naskah_draft'),
-    'import_naskah': (('intake', 'brief_draft', 'brief_approved', 'research_approved', 'style_approved'), 'naskah_draft'),
+    'import_naskah': (('style_approved',), 'naskah_draft'),
 }
 
 
@@ -512,8 +512,13 @@ def dispatch(name, args, **_):
                 current = store.get(job)
                 if current['rev'] != rev:
                     raise DomainError('STALE_REVISION', f"expected {current['rev']}")
-                episode_docs(_snapshot(store, job, rev))
-                data = submit(store, job, rev, args['target'])
+                target = args['target']
+                if target in ('brief', 'research', 'naskah', 'style_decision'):
+                    run = store.claim(job, rev, target)
+                    data = execute_run(store, run['run_id'])
+                else:
+                    episode_docs(_snapshot(store, job, rev))
+                    data = submit(store, job, rev, target)
             else:
                 _check_keys(args, ('job_id', 'artifact_id'))
                 data = _artifact(store, _identifier(args['job_id']), _identifier(args['artifact_id']))
