@@ -217,7 +217,7 @@ if (gl) {
   };
 }
 
-const tl = gsap.timeline({ paused: true, onUpdate: () => { window.__3D_STATE__.t = tl.time(); } });
+const tl = gsap.timeline({ paused: true });
 const frameAt = f => f / 30;
 const cards = [...document.querySelectorAll('.beat')];
 const seen = new Set();
@@ -254,12 +254,49 @@ function syncBeats(t) {
   }
 }
 window.__SYNC_BEATS__ = syncBeats;
+// A seek-driven recorder advances the timeline and reads the DOM; it never
+// calls our render helpers. onUpdate keeps state, cards and the WebGL frame in
+// step, so every recorded frame matches the timestamp it was taken at.
+// Cards and state are cheap DOM work and must happen on every seek. The WebGL
+// draw is NOT called here: the renderer drives it per frame, and calling it on
+// every tween tick inside onUpdate locks the tab up.
+tl.eventCallback('onUpdate', () => {
+  window.__3D_STATE__.t = tl.time();
+  syncBeats(tl.time());
+  if (typeof window.__3D_DRAW_HOOK__ === 'function') window.__3D_DRAW_HOOK__(tl.time());
+});
 
 __UMP_TIMELINE__
 const totalDur = Number(document.getElementById('stage').dataset.duration) || 24;
 tl.to('.rail', { scaleX: 1, duration: totalDur, ease: 'none' }, 0);
 tl.to(window.__3D_STATE__, { t: totalDur, duration: totalDur, ease: 'none' }, 0);
 window.__3D_RENDER__ = () => { syncBeats(tl.time()); drawScene(); };
+// A single throttled draw per animation frame: many seeks in one tick collapse
+// into one paint instead of hundreds.
+let __drawQueued = false;
+window.__3D_DRAW_HOOK__ = () => {
+  if (__drawQueued) return;
+  __drawQueued = true;
+  requestAnimationFrame(() => { __drawQueued = false; drawScene(); });
+};
+// The recorder prefers window.__player, then window.__hf.seek, then
+// timelines[key].seek(). A bare GSAP seek does not fire onUpdate in this
+// version, so the beat cards stayed blank in every recorded frame. Exposing a
+// player whose renderSeek paints synchronously is what the capture loop calls.
+window.__player = {
+  renderSeek(t) {
+    const time = Math.max(0, Number(t) || 0);
+    tl.pause();
+    tl.time(time, false);
+    window.__3D_STATE__.t = time;
+    syncBeats(time);
+    drawScene();
+    gsap.ticker.tick();
+  },
+  seek(t) { window.__player.renderSeek(t); },
+  get time() { return tl.time(); },
+  get duration() { return tl.duration(); },
+};
 window.__timelines = { root: tl };
 drawScene();
 </script>
