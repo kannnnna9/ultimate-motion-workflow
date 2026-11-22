@@ -256,6 +256,14 @@ def episode_docs(payload):
     if payload.get('style_id'):
         brand['style_id'] = payload['style_id']
     overrides = payload.get('cues', {})
+    # The override map is a patch on top of `cue.cues`, so it may only move a cue
+    # that actually exists; a stale key silently reintroduced an old timestamp
+    # and the rendered cards drifted away from the narration.
+    known = {item.get('id') for item in cue.get('cues', []) if isinstance(item, dict)}
+    unknown = sorted(set(overrides) - known)
+    if unknown:
+        raise DomainError('INVALID_CUE_OVERRIDE',
+                          f'cues override has ids that are not in cue.json: {", ".join(unknown)}')
     for item in cue.get('cues', []):
         if item['id'] in overrides:
             item['t_ms'] = overrides[item['id']]['t_ms']

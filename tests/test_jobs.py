@@ -71,6 +71,28 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(self.store.stage_of(job["job_id"]), "final_ready")
         self.store.claim(job["job_id"], rev, "final")
 
+    def test_new_cue_document_drops_stale_overrides(self):
+        """A replacement cue document wins over the older override map.
+
+        Regression: `revise` with a new `cue` kept the previous `cues` override
+        map, so `episode_docs` re-applied the old timestamps and the rendered
+        cards drifted ~1.5 s behind the narration while the script looked fixed.
+        """
+        job = self.store.create("Resep cola")
+        job_id = job["job_id"]
+        self.store.advance(job_id, 1, "set_brief", expect="intake", to="brief_draft")
+        rev = self.store.get(job_id)["rev"]
+        self.store.revise(job_id, rev, {"cues": {"c001": {"t_ms": 4200}}})
+        rev = self.store.get(job_id)["rev"]
+        self.assertIn("cues", json.loads((self.root / "jobs" / job_id / "revisions" / str(rev) / "input.json").read_text()))
+
+        self.store.revise(job_id, rev, {"cue": {"version": 1, "episode": "e", "fps": 30,
+                                                "cues": [{"id": "c001", "beat": "b1", "t_ms": 2567}]}})
+        latest = json.loads((self.root / "jobs" / job_id / "revisions" /
+                             str(self.store.get(job_id)["rev"]) / "input.json").read_text())
+        self.assertNotIn("cues", latest, "stale override map survived the new cue document")
+        self.assertEqual(latest["cue"]["cues"][0]["t_ms"], 2567)
+
     def test_revision_requires_new_approval(self):
         job = self.store.create("Explain the five o'clock coffee ritual")
         job_id = job["job_id"]

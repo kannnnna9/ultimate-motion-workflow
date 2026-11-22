@@ -220,12 +220,18 @@ class JobStore:
             row = self._job(db, job_id)
             self._check_rev(row, rev)
             payload = json.loads(row["payload"])
+            # A new cue document supersedes the per-cue override map: keeping the
+            # old overrides would silently re-apply timestamps the new document
+            # just replaced, and the cards would drift away from the narration.
+            if isinstance(patch.get("cue"), dict) and "cues" not in patch:
+                payload.pop("cues", None)
+                patch = {k: v for k, v in patch.items() if k != "cues"}
             payload = self._merge(copy.deepcopy(payload), patch)
             cues = payload.get("cues")
             if (not isinstance(payload.get("brief"), str) or not payload["brief"].strip()
-                or not isinstance(cues, dict)
+                or (cues is not None and not isinstance(cues, dict))
                 or any(not isinstance(cue, dict) or type(cue.get("t_ms")) is not int
-                       or cue["t_ms"] < 0 for cue in cues.values())):
+                       or cue["t_ms"] < 0 for cue in (cues or {}).values())):
                 raise DomainError("INVALID_PAYLOAD", "brief or cues")
             try:
                 encoded = json.dumps(payload, sort_keys=True, allow_nan=False)
