@@ -17,7 +17,68 @@ from pathlib import Path
 
 from .jobs import DomainError, JobStore
 
-ROOT = Path(__file__).resolve().parents[1]
+# Code and data live apart on purpose.
+#
+# CODE_ROOT follows the module because that is where `scripts/` and `styles/`
+# are, and they must be the code actually being executed. When the plugin is
+# installed this resolves inside ~/.hermes/plugins/ump.
+#
+# DATA_ROOT is the fixtures and other inputs. It must NOT live under CODE_ROOT:
+# a reinstall replaces that tree wholesale, so a fixture the operator corrected
+# would silently revert, and a running worker would lose its scripts mid-render.
+# Set UMP_DATA_ROOT to place it; otherwise it sits beside the job store.
+CODE_ROOT = Path(__file__).resolve().parents[1]
+ROOT = CODE_ROOT  # retained for callers that still name the code tree
+
+
+def _default_data_root() -> Path:
+    try:
+        from hermes_constants import get_hermes_home
+        base = Path(get_hermes_home()).resolve()
+    except Exception:
+        base = Path.home() / '.hermes'
+    return (base / 'ump').resolve()
+
+
+def data_root() -> Path:
+    override = os.environ.get('UMP_DATA_ROOT')
+    return Path(override).resolve() if override else _default_data_root()
+
+
+DATA_ROOT = data_root()
+
+
+def seed_fixtures(source: Path | None = None, root: Path | None = None) -> list[str]:
+    """Copy bundled fixtures into the data root without overwriting local edits.
+
+    Each fixture directory is written once. An existing directory is left alone,
+    so a fixture the operator corrected survives every reinstall and upgrade.
+    Returns the names actually seeded.
+    """
+    src_root = Path(source) if source is not None else CODE_ROOT / 'demo'
+    base = (Path(root) if root is not None else data_root()).resolve()
+    seeded = []
+    for name in FIXTURES:
+        destination = fixture_dir(name, base)
+        if destination.exists():
+            continue
+        source_dir = src_root / name
+        if not source_dir.is_dir():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source_dir, destination)
+        seeded.append(name)
+    return seeded
+
+
+def fixture_dir(name: str, root: Path | None = None) -> Path:
+    """Resolve one bundled fixture under the data root, refusing anything else."""
+    if name not in FIXTURES:
+        raise DomainError('INVALID_PAYLOAD', 'unknown fixture')
+    base = (Path(root) if root is not None else data_root()).resolve()
+    return owned(base, Path('fixtures') / name)
+
+
 START_GRACE = 20
 RUN_TIMEOUT = 900
 DOCS = {'brief': 'brief.json', 'research': 'research.json', 'naskah': 'naskah.json',
@@ -178,7 +239,7 @@ def episode_docs(payload):
     fixture = payload.get('fixture')
     docs = tuple(payload.get(name) for name in ('brand', 'naskah', 'cue'))
     if isinstance(fixture, str) and fixture in FIXTURES:
-        src = owned(ROOT, Path('demo') / fixture)
+        src = fixture_dir(fixture)
         if not src.is_dir():
             raise DomainError('INVALID_PAYLOAD', 'bundled fixture is not installed')
         docs = tuple(_read(owned(src, f'{name}.json')) for name in ('brand', 'naskah', 'cue'))
@@ -214,7 +275,7 @@ def _stage(store, run, directory):
     episode.mkdir()
     fixture = payload.get('fixture')
     if fixture == 'ump-second':
-        illustration = owned(ROOT, 'demo/ump-second/assets/illustration.svg')
+        illustration = owned(fixture_dir('ump-second'), 'assets/illustration.svg')
         (episode / 'assets').mkdir()
         shutil.copyfile(illustration, episode / 'assets/illustration.svg')
     for name, doc in zip(('brand', 'naskah', 'cue'), (brand, naskah, cue)):
@@ -304,7 +365,7 @@ def _render(store, run, directory, command):
             raise DomainError('INVALID_ARTIFACT', 'expected one PNG from HyperFrames')
         return images[0]
     fixture = payload.get('fixture')
-    asset_root = owned(ROOT, Path('demo') / fixture) if fixture in FIXTURES else snapshot.parent
+    asset_root = fixture_dir(fixture) if fixture in FIXTURES else snapshot.parent
     vo = episode / 'assets/audio/vo.mp3'
     vo.parent.mkdir(parents=True)
     (episode / 'work').mkdir()
