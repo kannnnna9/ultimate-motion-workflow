@@ -312,6 +312,16 @@ def _local_asset(root, name):
 
 def _mux(directory, episode, brand, cues, asset_root, target, command):
     from scripts.render import probe, validate_output
+    # A style that draws its own text must not also get the ASS track burned in:
+    # the same words land on screen twice and neither layer is readable. This is
+    # the flag scripts/render.py honours on its own mux path; the worker has a
+    # separate mux, so it has to read the preset too.
+    draws_own = False
+    try:
+        preset = json.loads((ROOT / 'styles' / str(brand.get('style_id')) / 'preset.json').read_text(encoding='utf-8'))
+        draws_own = bool(preset.get('draws_captions'))
+    except (OSError, ValueError):
+        draws_own = False
     frames = directory / 'frames.mp4'
     visual_s = float(probe(frames)['format']['duration'])
     if not 0 < visual_s <= 180:
@@ -325,7 +335,8 @@ def _mux(directory, episode, brand, cues, asset_root, target, command):
     if cutoff_ms <= 0:
         raise DomainError('INVALID_AUDIO_TIMING', 'end card starts before any narration')
     inputs = ['-i', str(frames), '-i', str(episode / 'assets/audio/vo.mp3')]
-    filters = ['[0:v]ass=episode/work/captions.ass[v]', f'[1:a]atrim=end={cutoff_ms/1000},apad=whole_dur={visual_s}[voice]']
+    filters = [('[0:v]null[v]' if draws_own else '[0:v]ass=episode/work/captions.ass[v]'),
+               f'[1:a]atrim=end={cutoff_ms/1000},apad=whole_dur={visual_s}[voice]']
     tracks = ['[voice]']
     starts = {}
     for cue in cues['cues']:
