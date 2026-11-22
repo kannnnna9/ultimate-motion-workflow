@@ -175,9 +175,9 @@ class StageGateTests(unittest.TestCase):
         rev = self.store.get(job_id)["rev"]
         wrong = self.store.add_artifact(job_id, rev, "preview", "brief.json", create_empty=True)
         with self.assertRaisesRegex(DomainError, "INVALID_APPROVAL"):
-            self.store.approve(job_id, rev, "brief", wrong["id"])
+            self.store.approve(job_id, rev, "brief", wrong["id"], evidence={"message_id":"m8","chat_id":"c8"})
         right = self.store.add_artifact(job_id, rev, "brief", "brief2.json", create_empty=True)
-        result = self.store.approve(job_id, rev, "brief", right["id"])
+        result = self.store.approve(job_id, rev, "brief", right["id"], evidence={"message_id":"m9","chat_id":"c9"})
         self.assertEqual(result["job_stage"], "brief_approved")
 
     def test_skill_documents_every_stage_route(self):

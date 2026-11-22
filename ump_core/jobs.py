@@ -40,7 +40,7 @@ TARGET_STAGE = {
     "brief": "brief_draft",
     "research": "research_draft",
     "naskah": "naskah_draft",
-    "style_decision": "research_approved",
+    "style_decision": "style_approved",
     "style_frame": "naskah_approved",
     "preview": "style_frame",
     "final": "final_ready",
@@ -134,7 +134,8 @@ class JobStore:
             );
             CREATE TABLE IF NOT EXISTS approvals (
                 job_id TEXT NOT NULL, rev INTEGER NOT NULL, stage TEXT NOT NULL,
-                artifact_id TEXT NOT NULL, PRIMARY KEY(job_id, rev, stage)
+                artifact_id TEXT NOT NULL, message_id TEXT, chat_id TEXT,
+                PRIMARY KEY(job_id, rev, stage)
             );
             CREATE TABLE IF NOT EXISTS notes (
                 id TEXT PRIMARY KEY, job_id TEXT NOT NULL, rev INTEGER NOT NULL,
@@ -147,6 +148,11 @@ class JobStore:
             );
             """)
         self._migrate_stage()
+        with self._db() as db:
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(approvals)")}
+            for name in ("message_id", "chat_id"):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE approvals ADD COLUMN {name} TEXT")
 
     def _migrate_stage(self):
         """Add the stage columns to a pre-staged database; safe to run repeatedly."""
@@ -277,7 +283,9 @@ class JobStore:
             db.execute("INSERT INTO artifacts VALUES (?,?,?,?,?)", (artifact_id, job_id, rev, kind, rel))
         return {"id": artifact_id, "job_id": job_id, "rev": rev, "kind": kind, "path": rel}
 
-    def approve(self, job_id, rev, stage, artifact_id):
+    def approve(self, job_id, rev, stage, artifact_id, *, evidence=None):
+        if not isinstance(evidence, dict) or not evidence.get("message_id") or not evidence.get("chat_id"):
+            raise DomainError("APPROVAL_EVIDENCE_REQUIRED", "inbound message evidence")
         with self._db() as db:
             row = self._job(db, job_id); self._check_rev(row, rev)
             art = db.execute("SELECT * FROM artifacts WHERE id=? AND job_id=? AND rev=?", (artifact_id, job_id, rev)).fetchone()
@@ -289,7 +297,7 @@ class JobStore:
             required = APPROVAL_PREVIOUS_STAGE.get(stage)
             if required is None or row["stage"] != required:
                 raise DomainError("APPROVAL_STAGE", f"{stage} requires {required} (at {row['stage']})")
-            db.execute("INSERT OR REPLACE INTO approvals VALUES (?,?,?,?)", (job_id, rev, stage, artifact_id))
+            db.execute("INSERT OR REPLACE INTO approvals VALUES (?,?,?,?,?,?)", (job_id, rev, stage, artifact_id, evidence["message_id"], evidence["chat_id"]))
             target = STAGE_NEXT.get(stage)
             if target is not None:
                 seq = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM stage_history WHERE job_id=?", (job_id,)).fetchone()[0]

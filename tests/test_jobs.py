@@ -53,7 +53,7 @@ class JobStoreTests(unittest.TestCase):
         self.store.advance(job["job_id"], 1, "set_brief", expect="intake", to="intake")
         artifact = self._artifact(job["job_id"], 1, "naskah", "naskah.json")
         with self.assertRaisesRegex(DomainError, "APPROVAL_STAGE"):
-            self.store.approve(job["job_id"], 1, "naskah", artifact["id"])
+            self.store.approve(job["job_id"], 1, "naskah", artifact["id"], evidence={"message_id":"m7","chat_id":"c7"})
 
     def test_preview_requires_style_frame_approval_and_final_ready(self):
         job = self.store.create("approval sequence")
@@ -63,11 +63,11 @@ class JobStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(DomainError, "APPROVAL_REQUIRED"):
             self.store.claim(job["job_id"], rev, "preview")
         style = self._artifact(job["job_id"], rev, "style_frame", "style.png")
-        self.store.approve(job["job_id"], rev, "script_style", style["id"])
+        self.store.approve(job["job_id"], rev, "script_style", style["id"], evidence={"message_id": "m1", "chat_id": "c1"})
         preview_run = self.store.claim(job["job_id"], rev, "preview")
         (self.root / "runs" / preview_run["run_id"] / "preview.mp4").write_bytes(b"preview")
         preview_artifact = self.store.finish(preview_run["run_id"], "preview.mp4", None)["artifact"]
-        self.store.approve(job["job_id"], rev, "preview", preview_artifact["id"])
+        self.store.approve(job["job_id"], rev, "preview", preview_artifact["id"], evidence={"message_id": "m3", "chat_id": "c3"})
         self.assertEqual(self.store.stage_of(job["job_id"]), "final_ready")
         self.store.claim(job["job_id"], rev, "final")
 
@@ -81,11 +81,11 @@ class JobStoreTests(unittest.TestCase):
             self.store.claim(job_id, rev, "preview")
 
         style = self._artifact(job_id, rev, "style_frame", "style.png")
-        self.store.approve(job_id, rev, "script_style", style["id"])
+        self.store.approve(job_id, rev, "script_style", style["id"], evidence={"message_id": "m2", "chat_id": "c2"})
         preview_run = self.store.claim(job_id, rev, "preview")
         (self.root / "runs" / preview_run["run_id"] / "preview.mp4").write_bytes(b"preview")
         preview = self.store.finish(preview_run["run_id"], "preview.mp4", None)["artifact"]
-        self.store.approve(job_id, rev, "preview", preview["id"])
+        self.store.approve(job_id, rev, "preview", preview["id"], evidence={"message_id": "m4", "chat_id": "c4"})
         self.assertEqual(self.store.stage_of(job_id), "final_ready")
         run = self.store.claim(job_id, rev, "final")
         self.store.finish(run["run_id"], None, "renderer failed")
@@ -191,7 +191,7 @@ class JobStoreTests(unittest.TestCase):
         self._render_style_frame(job)
         rev = self.store.get(job)["rev"]
         style = self._artifact(job, rev, "style_frame", "style.png")
-        self.store.approve(job, rev, "script_style", style["id"])
+        self.store.approve(job, rev, "script_style", style["id"], evidence={"message_id": "m5", "chat_id": "c5"})
         (self.root / style["path"]).unlink()
         with self.assertRaisesRegex(DomainError, "APPROVAL_REQUIRED"):
             self.store.claim(job, rev, "preview")

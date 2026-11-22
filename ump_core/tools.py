@@ -304,6 +304,8 @@ def _check_patch(store, job, rev, patch):
             if not re.fullmatch(r'c[0-9]{3}', key) or type(entry['t_ms']) is not int or not 0 <= entry['t_ms'] <= 175000:
                 raise DomainError('INVALID_TIMESTAMP', 'cue override requires a valid cue ID and millisecond position')
     old = _snapshot(store, job, rev)
+    if 'brand' in patch and isinstance(patch['brand'], dict) and 'style_id' in patch['brand']:
+        patch = {**patch, 'style_id': patch['brand']['style_id']}
     merged = JobStore._merge(old, patch)
     if merged.get('fixture') and any(merged.get(k) is not None for k in ('brand', 'naskah', 'cue')):
         raise DomainError('INVALID_PAYLOAD', 'choose the fixture or custom episode documents')
@@ -362,7 +364,13 @@ def _stage_action(store, job, rev, action, target, payload):
                 raise DomainError('INVALID_PAYLOAD', f'sources[{index}].url')
         current = _snapshot(store, job, _current_rev(store, job))
         if isinstance(current.get('sources'), list) and current['sources']:
+            existing = {item['id'] for item in current['sources']}
+            incoming = [item['id'] for item in sources]
+            if len(incoming) != len(set(incoming)) or existing.intersection(incoming):
+                raise DomainError('DUPLICATE_SOURCE_ID', 'source IDs must be unique')
             sources = current['sources'] + sources
+        elif len({item['id'] for item in sources}) != len(sources):
+            raise DomainError('DUPLICATE_SOURCE_ID', 'source IDs must be unique')
         store.revise(job, rev, {'sources': sources})
     elif action in ('write_naskah', 'import_naskah'):
         if action == 'import_naskah':
@@ -377,7 +385,15 @@ def _stage_action(store, job, rev, action, target, payload):
             raise DomainError('INVALID_STYLE', 'expected a preset ID')
         if not any(item['id'] == style and item['renderable'] for item in _catalog()['styles']):
             raise DomainError('INVALID_STYLE', 'preset is not renderable')
-        store.revise(job, rev, {'style_id': style})
+        current = _snapshot(store, job, rev)
+        if 'brand' not in current:
+            template = json.loads((ROOT / 'templates/episode/episodes/_contoh/brand.json').read_text(encoding='utf-8'))
+            template['style_id'] = style
+            store.revise(job, rev, {'brand': template})
+            rev = _current_rev(store, job)
+        else:
+            store.revise(job, rev, {'style_id': style})
+
     new_rev = _current_rev(store, job)
     origin = 'imported' if note == 'imported' else None
     return store.advance(job, new_rev, action, expect=store.stage_of(job), to=target,
@@ -476,7 +492,9 @@ def _job(store, action, payload):
             raise DomainError('INVALID_APPROVAL', 'unknown approval stage')
         _artifact(store, job, artifact)
         _authorization(f'UMP APPROVE {job} {rev} {stage} {artifact}', job, rev)
-        return store.approve(job, rev, stage, artifact)
+        key = _event_key()
+        evidence = {'message_id': key[3], 'chat_id': key[1]}
+        return store.approve(job, rev, stage, artifact, evidence=evidence)
     patch = payload.get('patch')
     if patch is not None:
         patch = _check_patch(store, job, rev, patch)
