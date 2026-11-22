@@ -3,6 +3,16 @@
   "default": "dark-editorial",
   "styles": [
     {
+      "id": "halftone-dossier",
+      "name": "Halftone Dossier",
+      "status": "ready",
+      "summary": "Berkas arsip cetak: kertas krem, halftone dua lapis, headline serif berat dengan bayangan misregister, stempel yang menghantam.",
+      "reference": "lemo-opuscar/styles/halftone-dossier/STYLE.md (spec only, CC-BY-NC-4.0)",
+      "composition": "styles/halftone-dossier/ump.html",
+      "demo": "demo/csw-fakta",
+      "preview": "styles/halftone-dossier/preview.jpg"
+    },
+    {
       "id": "dark-editorial",
       "name": "Dark Editorial",
       "status": "ready",

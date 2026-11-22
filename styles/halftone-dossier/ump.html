@@ -1,0 +1,714 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1080,height=1920"><title>UMP Halftone Dossier</title><script src="assets/gsap.min.js"></script><style>
+:root{
+  --ground:#F2E6D0;--ink:#1A1A2E;--accent:#E23744;--secondary:#F2C14E;
+  --overprint:#2E4DA7;--paper_hi:#FBF3E2;
+  --dot_step:22px;--dot_k:0.7;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
+#stage{position:relative;width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
+
+/* ---- paper: mottling, vignette, fold. Built once, multiplied over everything ---- */
+#paper{position:absolute;inset:0;z-index:5;pointer-events:none;mix-blend-mode:multiply;opacity:.9;
+  background:
+    radial-gradient(120% 90% at 50% 40%, rgba(255,255,255,.55) 0%, rgba(255,255,255,0) 55%),
+    radial-gradient(150% 120% at 50% 50%, rgba(0,0,0,0) 55%, rgba(90,60,30,.22) 100%),
+    linear-gradient(90deg, rgba(0,0,0,0) 49.4%, rgba(90,60,30,.10) 50%, rgba(0,0,0,0) 50.6%);}
+#mottle{position:absolute;inset:0;z-index:4;pointer-events:none;opacity:.16;mix-blend-mode:multiply;
+  background-image:radial-gradient(circle at 12% 22%, rgba(120,80,40,.5) 0 6px, transparent 7px),
+    radial-gradient(circle at 68% 14%, rgba(120,80,40,.4) 0 9px, transparent 10px),
+    radial-gradient(circle at 34% 71%, rgba(120,80,40,.35) 0 7px, transparent 8px),
+    radial-gradient(circle at 82% 63%, rgba(120,80,40,.45) 0 11px, transparent 12px),
+    radial-gradient(circle at 21% 88%, rgba(120,80,40,.3) 0 5px, transparent 6px);
+  background-size:520px 560px,610px 480px,470px 640px,700px 590px,430px 520px;}
+
+/* ---- halftone fields: dot size driven by a radial density, never a gradient ---- */
+.ht{position:absolute;inset:0;pointer-events:none;z-index:2}
+#ht_a{mix-blend-mode:multiply;opacity:.5}
+#ht_b{mix-blend-mode:multiply;opacity:.34}
+
+/* ---- bureaucratic HUD ---- */
+#hud{position:absolute;left:96px;right:96px;top:104px;z-index:40;isolation:isolate;display:flex;justify-content:space-between;
+  font:700 30px/1 "Courier New",monospace;color:var(--ink);letter-spacing:.14em;text-transform:uppercase}
+#case_no{border:3px solid var(--ink);padding:10px 16px;background:var(--paper_hi)}
+#rec{display:flex;align-items:center;gap:12px}
+#rec_dot{width:18px;height:18px;border-radius:50%;background:var(--accent)}
+#rule{position:absolute;left:96px;right:96px;top:180px;height:4px;background:var(--ink);z-index:40}
+
+/* ---- exhibit: the fact, printed ---- */
+#exhibit{position:absolute;left:96px;right:96px;top:250px;height:880px;z-index:30}
+#ex_num{position:absolute;left:-6px;top:-46px;font:900 210px/0.82 Georgia,serif;color:var(--overprint);
+  z-index:3;isolation:isolate;text-shadow:0 0 0 var(--paper_hi), 0 0 26px var(--paper_hi)}
+#ex_num span{position:absolute;left:9px;top:9px;color:var(--accent)}
+#ex_card{position:absolute;left:0;right:0;top:190px;bottom:80px;background:var(--paper_hi);
+  border:6px solid var(--ink);z-index:1;box-shadow:14px 14px 0 rgba(46,77,167,.35);overflow:hidden}
+/* the exhibit drawing: a printed plate, redrawn per beat */
+#ex_draw{position:absolute;inset:0;z-index:2;pointer-events:none}
+#ex_draw > svg{filter:url(#boil)}
+#ex_card{filter:url(#boil)}
+#ex_draw svg{width:100%;height:100%}
+#ex_label{position:absolute;left:26px;top:22px;z-index:3;font:800 30px/1 "Courier New",monospace;
+  color:var(--ink);letter-spacing:.18em;text-transform:uppercase;opacity:.75}
+#ex_stamp{position:absolute;right:24px;bottom:26px;z-index:6;isolation:isolate;transform:rotate(-9deg);opacity:.93;filter:url(#stampInk)}
+#ex_stamp text{fill:var(--accent);font:900 46px Helvetica,Arial,sans-serif;letter-spacing:2px}
+#ex_stamp rect{fill:none;stroke:var(--accent);stroke-width:7}
+#ex_stamp rect.inner{stroke-width:2}
+
+/* ---- headline: heavy serif, misregistered shadow ---- */
+#headline{position:absolute;left:96px;right:96px;top:1180px;z-index:35;opacity:0}
+#headline h1{position:relative;isolation:isolate;font:900 108px/1.02 Georgia,'Times New Roman',serif;color:var(--ink);
+  letter-spacing:-.01em;text-transform:uppercase}
+#headline h1 .fg span{text-shadow:8px 8px 0 rgba(46,77,167,.85)}
+#headline h1 .fg > span:not(:last-child){margin-right:0.26em}
+
+/* ---- caption bar: the pill that carries the spoken line ---- */
+#beat{position:absolute;left:96px;right:96px;bottom:150px;z-index:40;opacity:0;text-align:center}
+#beat .pill{display:inline-block;background:var(--ink);color:var(--ground);border-radius:64px;
+  padding:24px 34px;font:700 38px/1.26 Helvetica,Arial,sans-serif;box-shadow:12px 12px 0 var(--overprint);
+  max-height:340px;overflow:hidden}
+#beat .pill .kw{color:var(--secondary)}
+
+/* ---- dot wipe: a coarse grid of circles that covers the frame between beats ---- */
+#wipe{position:absolute;inset:0;z-index:50;pointer-events:none;opacity:0}
+#fx{position:absolute;inset:0;z-index:8;pointer-events:none;width:1080px;height:1920px}
+#exhibit,#headline,#beat{will-change:transform,opacity}
+</style></head><body data-composition-id="root" data-width="1080" data-height="1920" data-fps="30" data-duration="__UMP_DURATION__">
+<div id="stage">
+  <div id="wipe"></div>
+  <svg class="ht" id="ht_a" width="1080" height="1920" viewBox="0 0 1080 1920" data-layout-allow-overflow></svg>
+  <svg id="defs" width="0" height="0" style="position:absolute"><defs>
+    <filter id="boil" x="-8%" y="-8%" width="116%" height="116%">
+      <feTurbulence id="boilT" type="fractalNoise" baseFrequency="0.021" numOctaves="2" seed="1" result="w"/>
+      <feDisplacementMap in="SourceGraphic" in2="w" scale="5.5" xChannelSelector="R" yChannelSelector="G" result="d"/>
+      <feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="2" seed="4" result="g"/>
+      <feColorMatrix in="g" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -20 14" result="gm"/>
+      <feComposite in="d" in2="gm" operator="in"/>
+    </filter>
+    <filter id="stampInk" x="-12%" y="-12%" width="124%" height="124%">
+      <feTurbulence id="stampT" type="fractalNoise" baseFrequency="0.045" numOctaves="3" seed="11" result="w"/>
+      <feDisplacementMap in="SourceGraphic" in2="w" scale="6" xChannelSelector="R" yChannelSelector="G" result="d"/>
+      <feTurbulence type="fractalNoise" baseFrequency="0.55" numOctaves="3" seed="21" result="g"/>
+      <feColorMatrix in="g" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -8 5.6" result="gm"/>
+      <feComposite in="d" in2="gm" operator="in"/>
+    </filter>
+  </defs></svg>
+  <canvas id="fx" width="1080" height="1920"></canvas>
+  <svg class="ht" id="ht_b" width="1080" height="1920" viewBox="0 0 1080 1920" data-layout-allow-overflow></svg>
+  <div id="mottle" data-layout-allow-occlusion></div>
+  <div id="paper"></div>
+
+  <div id="hud"><div id="case_no">BERKAS 001-CSW</div><div id="rec"><span id="rec_dot"></span><span>ARSIP JAKARTA</span></div></div>
+  <div id="rule"></div>
+
+  <div id="exhibit">
+    <div id="ex_num"><span>01</span>01</div>
+    <div id="ex_card"><div id="ex_draw"></div><div id="ex_label">EXHIBIT A</div></div>
+    <svg id="ex_stamp" viewBox="0 0 420 120" width="420" height="120"><g id="stamp_g"></g></svg>
+  </div>
+
+  <div id="headline"><h1><span class="fg"></span></h1></div>
+  <div id="beat"><div class="pill"><span class="txt"></span></div></div>
+</div>
+<div id="cards" style="display:none">__UMP_CARDS__</div>
+<script>
+const EP = __UMP_EPISODE__;
+const DURATION = __UMP_DURATION__;
+/* cards are HTML markup, not a JS array: read the rendered elements */
+const CARDS_DATA = Array.prototype.map.call(document.querySelectorAll('#cards .beat'), function (el) {
+  const pick = function (sel) { const n = el.querySelector(sel); return n ? n.textContent.trim() : ''; };
+  const at = el.getAttribute('data-at-ms');
+  return {
+    at: at !== null ? parseInt(at, 10) / 1000 : null,
+    tag: (el.getAttribute('data-beat') || pick('.label') || '').toUpperCase(),
+    headline: el.getAttribute('data-headline') || pick('h2') || '',
+    body: el.getAttribute('data-body') || pick('p') || ''
+  };
+});
+const h1El = document.querySelector('#headline h1 .fg');
+const headlineEl = document.getElementById('headline');
+const pillEl = document.querySelector('#beat .pill');
+const pillTxt = document.querySelector('#beat .pill .txt');
+const beatEl = document.getElementById('beat');
+const exNum = document.getElementById('ex_num');
+const exCard = document.getElementById('ex_card');
+const exStamp = document.getElementById('ex_stamp');
+
+/* ---- halftone: one path of circles; radius follows density. Deterministic. ---- */
+function halftone(svg, opts) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const step = opts.step, angle = opts.angle, color = opts.color;
+  const cx = opts.cx, cy = opts.cy, radius = opts.radius, k = opts.k;
+  const ca = Math.cos(angle), sa = Math.sin(angle);
+  const reach = Math.ceil(Math.sqrt(1080 * 1080 + 1920 * 1920)) / step;
+  const d = [];
+  for (let gy = -reach; gy <= reach; gy++) {
+    for (let gx = -reach; gx <= reach; gx++) {
+      const px = gx * step * ca - gy * step * sa + 540;
+      const py = gx * step * sa + gy * step * ca + 960;
+      if (px < -step || px > 1080 + step || py < -step || py > 1920 + step) continue;
+      // density falls off with distance from the field centre
+      const dist = Math.hypot(px - cx, py - cy) / radius;
+      const density = Math.max(0, 1 - dist);
+      const r = density * step * k;
+      if (r < 0.65) continue;
+      d.push('M' + (px - r).toFixed(2) + ',' + py.toFixed(2) +
+             'a' + r.toFixed(2) + ',' + r.toFixed(2) + ' 0 1,0 ' + (2 * r).toFixed(2) + ',0' +
+             'a' + r.toFixed(2) + ',' + r.toFixed(2) + ' 0 1,0 ' + (-2 * r).toFixed(2) + ',0');
+    }
+  }
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', d.join(' '));
+  path.setAttribute('fill', color);
+  svg.appendChild(path);
+  return d.length;
+}
+const dotsA = halftone(document.getElementById('ht_a'),
+  { step: 22, angle: Math.PI / 6, color: 'var(--overprint)', cx: 540, cy: 520, radius: 980, k: 0.7 });
+const dotsB = halftone(document.getElementById('ht_b'),
+  { step: 26, angle: Math.PI / 12, color: 'var(--accent)', cx: 180, cy: 1520, radius: 820, k: 0.62 });
+
+/* ---- the wipe: a coarse dot grid drawn once, revealed by scale ---- */
+(function buildWipe() {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('width', '1080'); svg.setAttribute('height', '1920');
+  svg.setAttribute('viewBox', '0 0 1080 1920');
+  const d = [];
+  const step = 68, r = 52;
+  for (let y = 0; y <= 1920 + step; y += step) {
+    for (let x = 0; x <= 1080 + step; x += step) {
+      d.push('M' + (x - r) + ',' + y + 'a' + r + ',' + r + ' 0 1,0 ' + (2 * r) + ',0a' + r + ',' + r + ' 0 1,0 ' + (-2 * r) + ',0');
+    }
+  }
+  const p = document.createElementNS(NS, 'path');
+  p.setAttribute('d', d.join(' '));
+  p.setAttribute('fill', 'var(--ink)');
+  svg.appendChild(p);
+  document.getElementById('wipe').appendChild(svg);
+  window.__wipeDots = d.length;
+})();
+
+/* ---- exhibit plates: one printed figure per beat.
+   Five motifs that read as case-file exhibits: a route map, an organisation
+   chart, a floor stack, a section cut and a timeline. All drawn from rects and
+   lines, so they stay deterministic and carry no external assets. ---- */
+const NS = 'http://www.w3.org/2000/svg';
+function el(name, attrs, parent) {
+  const n = document.createElementNS(NS, name);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+/* ============================ DRAWING KIT ============================
+   Small deterministic shapes built from rects, paths and arcs. Everything is
+   pure geometry with an ink outline and a flat fill, the way the style draws:
+   no gradients, no external assets, no randomness that is not seeded.
+   ==================================================================== */
+
+/* a person: tapered two-tone body, round head, a hat or hair shape, no face */
+function figure(g, x, y, h, opts) {
+  const o = opts || {};
+  const seed = o.seed === undefined ? 1 : o.seed;
+  const r = rng(seed * 7919 + Math.round(x) * 13 + Math.round(y) * 17);
+  const ink = o.ink || 'var(--ink)';
+  /* the coat must differ from the paper behind it, or the figure reads hollow */
+  const palette = ['var(--overprint)', 'var(--accent)', 'var(--secondary)', 'var(--paper_hi)'];
+  const body = o.fill || palette[Math.floor(r() * palette.length)];
+  const headFill = o.headFill || 'var(--paper_hi)';
+  const head = h * 0.19;
+  const shoulder = h * 0.30;
+  /* the figure is drawn around its own origin, so it has to carry the position */
+  const grp = el('g', { transform: 'translate(' + x + ' ' + y + ')' }, g);
+
+  /* body: a tapered coat, wider at the shoulders */
+  el('path', {
+    d: 'M' + (-shoulder * 0.5) + ' 0 L' + (shoulder * 0.5) + ' 0 L' +
+       (shoulder * 0.38) + ' ' + (-h + head) + ' L' + (-shoulder * 0.38) + ' ' + (-h + head) + ' Z',
+    fill: body, stroke: ink, 'stroke-width': 3.2, 'stroke-linejoin': 'round'
+  }, grp);
+  /* head */
+  el('circle', { cx: 0, cy: -h + head * 0.62, r: head * 0.52, fill: headFill, stroke: ink, 'stroke-width': 3.2 }, grp);
+  /* hair, hat or a bun: identity without a face */
+  const kind = Math.floor(r() * 3);
+  if (kind === 0) {
+    el('path', { d: 'M' + (-head * 0.55) + ' ' + (-h + head * 0.45) + ' a' + (head * 0.55) + ' ' + (head * 0.55) + ' 0 0 1 ' +
+      (head * 1.1) + ' 0 Z', fill: ink }, grp);
+  } else if (kind === 1) {
+    el('rect', { x: -head * 0.75, y: -h + head * 0.18, width: head * 1.5, height: head * 0.22, fill: ink }, grp);
+    el('rect', { x: -head * 0.5, y: -h + head * 0.40, width: head, height: head * 0.3, fill: ink }, grp);
+  } else {
+    el('circle', { cx: head * 0.55, cy: -h + head * 0.35, r: head * 0.24, fill: ink }, grp);
+  }
+  /* one arm, swinging: the reason a still figure does not look frozen */
+  const swing = o.arm === undefined ? 0 : o.arm;
+  el('path', {
+    d: 'M' + (shoulder * 0.30) + ' ' + (-h + head + h * 0.06) + ' L' +
+       (shoulder * 0.30 + swing) + ' ' + (-h + head + h * 0.30),
+    stroke: ink, 'stroke-width': 4.5, 'stroke-linecap': 'round', fill: 'none'
+  }, grp);
+  return grp;
+}
+
+/* a group of people at a spread of heights; deterministic per seed */
+function crowd(g, x, y, count, opts) {
+  const o = opts || {};
+  const r = rng((o.seed || 1) * 104729);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const px = x + i * (o.gap || 34) + (r() - 0.5) * 12;
+    const h = (o.h || 54) * (0.88 + r() * 0.24);
+    out.push(figure(g, px, y + (r() - 0.5) * 8, h, { seed: (o.seed || 1) + i, arm: (r() - 0.5) * 10 }));
+  }
+  return out;
+}
+
+/* a Transjakarta-style bus, side on */
+function bus(g, x, y, len, opts) {
+  const o = opts || {};
+  const h = len * 0.42;
+  const ink = 'var(--ink)';
+  el('rect', { x: x, y: y - h, width: len, height: h, rx: len * 0.05,
+    fill: o.fill || 'var(--overprint)', stroke: ink, 'stroke-width': 5 }, g);
+  /* windscreen and the long window band */
+  el('rect', { x: x + len * 0.04, y: y - h * 0.86, width: len * 0.14, height: h * 0.44,
+    fill: 'var(--paper_hi)', stroke: ink, 'stroke-width': 3 }, g);
+  el('rect', { x: x + len * 0.21, y: y - h * 0.86, width: len * 0.72, height: h * 0.40,
+    fill: 'var(--paper_hi)', stroke: ink, 'stroke-width': 3 }, g);
+  /* window mullions */
+  for (let i = 1; i < 7; i++) {
+    const wx = x + len * 0.21 + (len * 0.72 / 7) * i;
+    el('path', { d: 'M' + wx + ' ' + (y - h * 0.86) + ' L' + wx + ' ' + (y - h * 0.46),
+      stroke: ink, 'stroke-width': 2 }, g);
+  }
+  /* livery stripe and a door */
+  el('rect', { x: x, y: y - h * 0.34, width: len, height: h * 0.10, fill: 'var(--accent)' }, g);
+  el('rect', { x: x + len * 0.50, y: y - h * 0.90, width: len * 0.10, height: h * 0.58,
+    fill: 'var(--ink)', opacity: 0.8 }, g);
+  /* wheels */
+  [0.20, 0.78].forEach(function (k) {
+    el('circle', { cx: x + len * k, cy: y, r: h * 0.19, fill: 'var(--ink)' }, g);
+    el('circle', { cx: x + len * k, cy: y, r: h * 0.08, fill: 'var(--paper_hi)' }, g);
+  });
+}
+
+/* a tree: trunk plus two foliage discs, drawn in the plate's own palette */
+function tree(g, x, y, h, opts) {
+  const o = opts || {};
+  const ink = 'var(--ink)';
+  el('path', { d: 'M' + (x - h * 0.055) + ' ' + y + ' L' + (x - h * 0.04) + ' ' + (y - h * 0.55) +
+    ' L' + (x + h * 0.04) + ' ' + (y - h * 0.55) + ' L' + (x + h * 0.055) + ' ' + y + ' Z',
+    fill: o.trunk || 'var(--ink)', stroke: ink, 'stroke-width': 2.5 }, g);
+  [[0, -0.72, 0.30], [-0.19, -0.60, 0.22], [0.20, -0.62, 0.24]].forEach(function (c) {
+    el('circle', { cx: x + h * c[0], cy: y + h * (c[1] - 0.05), r: h * c[2],
+      fill: o.fill || 'var(--secondary)', stroke: ink, 'stroke-width': 3 }, g);
+  });
+}
+
+/* a block: body, roof line, and a grid of lit windows */
+function building(g, x, y, w, h, opts) {
+  const o = opts || {};
+  const ink = 'var(--ink)';
+  el('rect', { x: x, y: y - h, width: w, height: h,
+    fill: o.fill || 'var(--paper_hi)', stroke: ink, 'stroke-width': 5 }, g);
+  el('rect', { x: x - w * 0.04, y: y - h - w * 0.06, width: w * 1.08, height: w * 0.07,
+    fill: ink }, g);
+  windows(g, x, y, w, h, o);
+  return g;
+}
+
+/* the window grid: some lit, some dark, chosen by a seeded draw */
+function windows(g, x, y, w, h, opts) {
+  const o = opts || {};
+  const r = rng((o.seed || 3) * 31337 + Math.round(w));
+  const cols = Math.max(2, Math.floor(w / 34));
+  const rows = Math.max(2, Math.floor(h / 40));
+  const cw = w / cols, ch = h / rows;
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      const lit = r() > 0.42;
+      el('rect', {
+        x: x + cx * cw + cw * 0.22, y: y - h + cy * ch + ch * 0.20,
+        width: cw * 0.56, height: ch * 0.52,
+        fill: lit ? 'var(--secondary)' : 'var(--overprint)', opacity: lit ? 0.95 : 0.30
+      }, g);
+    }
+  }
+}
+
+const EXHIBIT_DRAWERS = [
+  /* 01 — the halte: a shelter, a bus at the kerb, people waiting, a street tree */
+  function (g) {
+    /* pavement */
+    el('rect', { x: 40, y: 470, width: 780, height: 12, fill: 'var(--ink)' }, g);
+    /* the shelter: roof on two posts, a bench inside */
+    el('path', { d: 'M90 300 L470 300 L440 258 L120 258 Z', fill: 'var(--accent)', stroke: 'var(--ink)', 'stroke-width': 5 }, g);
+    el('rect', { x: 118, y: 300, width: 9, height: 170, fill: 'var(--ink)' }, g);
+    el('rect', { x: 432, y: 300, width: 9, height: 170, fill: 'var(--ink)' }, g);
+    el('rect', { x: 150, y: 396, width: 250, height: 12, fill: 'var(--ink)' }, g);
+    el('rect', { x: 120, y: 330, width: 60, height: 46, fill: 'var(--paper_hi)', stroke: 'var(--ink)', 'stroke-width': 3 }, g);
+    /* people under the shelter and at the kerb, at mixed heights */
+    crowd(g, 168, 470, 4, { seed: 11, gap: 46, h: 92 });
+    crowd(g, 510, 470, 2, { seed: 23, gap: 40, h: 100 });
+    /* the bus pulling in */
+    bus(g, 520, 470, 300, {});
+    tree(g, 762, 470, 150, { seed: 5 });
+    windows(g, 90, 300, 340, 44, { seed: 5 });
+    /* the route line runs behind everything, with the stop marked */
+    el('path', { d: 'M60 214 L800 214', stroke: 'var(--overprint)', 'stroke-width': 4, 'stroke-dasharray': '16 12' }, g);
+    el('circle', { cx: 280, cy: 214, r: 13, fill: 'var(--accent)', stroke: 'var(--ink)', 'stroke-width': 3 }, g);
+  },
+
+  /* 02 — the name: an archival document, the letterhead building it came from */
+  function (g) {
+    /* the file card */
+    el('rect', { x: 120, y: 90, width: 620, height: 400, fill: 'var(--paper_hi)',
+      stroke: 'var(--ink)', 'stroke-width': 5 }, g);
+    el('rect', { x: 120, y: 90, width: 620, height: 54, fill: 'var(--overprint)' }, g);
+    /* ruled lines of a typed citation */
+    for (let i = 0; i < 7; i++) {
+      el('rect', { x: 158, y: 180 + i * 34, width: 300 + (i % 3) * 90, height: 7,
+        fill: 'var(--ink)', opacity: 0.34 }, g);
+    }
+    /* the building the name came from, stamped over the card's corner */
+    building(g, 452, 480, 220, 210, { seed: 7, fill: 'var(--paper_hi)' });
+    crowd(g, 300, 480, 3, { seed: 31, gap: 44, h: 78 });
+    tree(g, 200, 480, 120, { seed: 9 });
+    windows(g, 470, 480, 200, 200, { seed: 12 });
+    el('rect', { x: 90, y: 478, width: 700, height: 10, fill: 'var(--ink)' }, g);
+  },
+
+  /* 03 — five floors: a cutaway stack with people on each deck */
+  function (g) {
+    const floors = 5;
+    const base = 500;
+    const fh = 74;
+    const left = 170, right = 690;
+    for (let i = 0; i < floors; i++) {
+      const y = base - i * fh;
+      const lit = i === 1;
+      el('rect', { x: left, y: y - fh, width: right - left, height: fh,
+        fill: lit ? 'var(--accent)' : 'var(--paper_hi)', stroke: 'var(--ink)', 'stroke-width': 4 }, g);
+      /* the deck slab */
+      el('rect', { x: left - 16, y: y - 8, width: right - left + 32, height: 9, fill: 'var(--ink)' }, g);
+      /* people standing on the deck above, smaller with height */
+      const count = 5 - Math.floor(i / 2);
+      for (let k = 0; k < count; k++) {
+        const px = left + 48 + k * ((right - left - 96) / Math.max(1, count - 1));
+        figure(g, px, y - fh + 52, 46, { seed: (i + 1) * 17 + k, arm: (k % 2 ? 5 : -5) });
+      }
+      /* floor number */
+      el('text', { x: left - 40, y: y - fh * 0.28, 'text-anchor': 'end', fill: 'var(--ink)',
+        'font-family': 'Courier New,monospace', 'font-weight': 800, 'font-size': 32, textContent: String(i + 1) }, g);
+    }
+    /* the bus bay at street level */
+    bus(g, 200, base, 300, { fill: 'var(--overprint)' });
+    el('rect', { x: 120, y: base, width: 640, height: 10, fill: 'var(--ink)' }, g);
+  },
+
+  /* 04 — the loop: a section through the building, the walkway ringing it */
+  function (g) {
+    /* shell */
+    el('path', { d: 'M160 500 L160 150 L700 150 L700 500', fill: 'none', stroke: 'var(--ink)', 'stroke-width': 8 }, g);
+    /* the walkway on level two, drawn as a broad band */
+    el('path', { d: 'M160 380 L700 380', stroke: 'var(--overprint)', 'stroke-width': 26 }, g);
+    el('path', { d: 'M160 380 L700 380', stroke: 'var(--ink)', 'stroke-width': 3, 'stroke-dasharray': '14 10' }, g);
+    /* people walking the loop, all facing the same way round */
+    crowd(g, 220, 380, 6, { seed: 41, gap: 72, h: 66 });
+    /* the arrows that say it is a loop, not a line */
+    [[300, 400], [560, 400], [430, 352]].forEach(function (p, i) {
+      const dir = i === 2 ? 'M-14 0 L14 0' : 'M14 0 L-14 0';
+      el('path', { d: dir, stroke: 'var(--accent)', 'stroke-width': 7, 'stroke-linecap': 'round',
+        transform: 'translate(' + p[0] + ' ' + p[1] + ')' }, g);
+    });
+    /* the halte at the top deck */
+    el('rect', { x: 300, y: 150, width: 260, height: 44, fill: 'var(--secondary)', stroke: 'var(--ink)', 'stroke-width': 4 }, g);
+    crowd(g, 350, 194, 2, { seed: 53, gap: 54, h: 52 });
+    /* the outer wall, glazed */
+    windows(g, 176, 340, 508, 150, { seed: 44 });
+    /* ground */
+    el('rect', { x: 120, y: 498, width: 620, height: 11, fill: 'var(--ink)' }, g);
+  },
+
+  /* 05 — the corridor over time: a street that changes, three eras */
+  function (g) {
+    /* the street runs back in perspective: four bands of buildings */
+    const rows = [{ y: 420, w: 120, h: 110 }, { y: 356, w: 96, h: 84 }, { y: 306, w: 72, h: 60 }];
+    rows.forEach(function (row, ri) {
+      let x = 70 + ri * 26;
+      let n = 0;
+      while (x < 800) {
+        building(g, x, row.y, row.w, row.h, { seed: 60 + ri * 10 + n, fill: ri === 1 ? 'var(--paper_hi)' : 'var(--paper_hi)' });
+        x += row.w + 18;
+        n++;
+      }
+    });
+    /* the road, narrowing to a vanishing point */
+    el('path', { d: 'M60 500 L800 500 L560 420 L300 420 Z', fill: 'var(--overprint)', opacity: 0.35 }, g);
+    el('path', { d: 'M60 500 L800 500', stroke: 'var(--ink)', 'stroke-width': 6 }, g);
+    /* a bus up the street and people on the pavement */
+    bus(g, 380, 424, 150, { fill: 'var(--accent)' });
+    crowd(g, 120, 500, 3, { seed: 71, gap: 40, h: 86 });
+    crowd(g, 640, 500, 2, { seed: 83, gap: 38, h: 74 });
+    tree(g, 740, 500, 140, { seed: 13 });
+    tree(g, 62, 500, 120, { seed: 19 });
+  }
+];
+
+const exDraw = document.getElementById('ex_draw');
+const exLabel = document.getElementById('ex_label');
+
+/* the stamp is an ink mark: drawn once as a vector plate, slammed per beat */
+(function buildStamp() {
+  const g = document.getElementById('stamp_g');
+  g.appendChild(el('rect', { x: 5, y: 5, width: 410, height: 110, rx: 12, 'stroke-width': 7 }));
+  g.appendChild(el('rect', { x: 15, y: 15, width: 390, height: 90, rx: 8, class: 'inner' }));
+  const t = el('text', { x: 210, y: 79, 'text-anchor': 'middle' });
+  t.textContent = 'TERVERIFIKASI';
+  g.appendChild(t);
+})();
+
+/* ============================================================================
+   MOTION MODEL
+   The previous version described motion as tweens: enter, hold, exit. That is
+   the anatomy of a slide, and it reads as one. Everything below is instead a
+   function of time, so any frame can be produced without knowing which frames
+   came before it, and the picture never stops breathing.
+
+   Ported ideas, not code, from lemo-opuscar/styles/halftone-dossier/STYLE.md
+   (§5 Motion quality): line boil at ~10 fps, per-glyph pop with squash,
+   overshoot on every entrance, damped bounces that preserve volume, a stamp
+   slam, grain reseeded every two frames, and idle life that never stops.
+   ========================================================================== */
+
+const clamp = function (x, a, b) { a = a === undefined ? 0 : a; b = b === undefined ? 1 : b;
+  return Math.max(a, Math.min(b, x)); };
+const seg = function (t, a, b) { return clamp((t - a) / (b - a)); };
+const lerp = function (a, b, p) { return a + (b - a) * p; };
+
+const E = {
+  out: function (p) { return 1 - Math.pow(1 - p, 3); },
+  in: function (p) { return p * p * p; },
+  io: function (p) { return p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; },
+  back: function (p) { const c = 1.9; return 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2); },
+  elastic: function (p) {
+    if (p <= 0) return 0; if (p >= 1) return 1;
+    return Math.pow(2, -10 * p) * Math.sin((p * 10 - 0.75) * 2 * Math.PI / 3) + 1;
+  }
+};
+/* a volume-preserving landing: squash is the inverse of the stretch that precedes it */
+const spring = function (t, t0, d) {
+  const p = seg(t, t0, t0 + d);
+  if (p <= 0) return 0;
+  const after = Math.max(0, t - (t0 + d));
+  return 1 + 0.055 * Math.sin(after * 30) * Math.exp(-after * 9);
+};
+const pop = function (t, t0, d) { d = d || 0.34; return t < t0 ? 0 : E.back(seg(t, t0, t0 + d)); };
+function rng(seed) {
+  return function () {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let x = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    x = x + Math.imul(x ^ x >>> 7, 61 | x) ^ x;
+    return ((x ^ x >>> 14) >>> 0) / 4294967296;
+  };
+}
+const setT = function (el, x, y, s, r, sy) {
+  el.style.transform = 'translate(' + x.toFixed(2) + 'px,' + y.toFixed(2) + 'px) rotate(' + (r || 0).toFixed(2) +
+    'deg) scale(' + s.toFixed(4) + ',' + (sy === undefined ? s : sy).toFixed(4) + ')';
+};
+const setO = function (el, o) { el.style.opacity = Math.max(0, Math.min(1, o)).toFixed(3); };
+
+/* card schedule: real cue times, so the picture follows the narration */
+const slot = DURATION / Math.max(1, CARDS_DATA.length);
+const scheduled = CARDS_DATA.map(function (c, i) { return c.at !== null ? c.at : i * slot; });
+const beats = CARDS_DATA.map(function (c, i) {
+  return {
+    card: c,
+    t0: scheduled[i],
+    t1: (i + 1 < scheduled.length) ? scheduled[i + 1] : DURATION
+  };
+});
+
+/* the exhibit plate is rebuilt only when the beat changes, not every frame */
+let plateIndex = -1;
+const plateSvg = el('svg', { viewBox: '0 0 860 620', preserveAspectRatio: 'xMidYMid meet' });
+exDraw.appendChild(plateSvg);
+const plateGroup = el('g', {});
+plateSvg.appendChild(plateGroup);
+
+function currentBeat(t) {
+  let idx = 0;
+  for (let i = 0; i < beats.length; i++) if (t >= beats[i].t0) idx = i;
+  return idx;
+}
+
+/* ---- per-glyph headline: each glyph drops, squashes and rebounds ---------- */
+const glyphs = [];
+function buildHeadline(text) {
+  /* One span per glyph, but the glyphs are grouped per word.
+     A bare glyph is inline-block, so the line breaker may split a word at any
+     character: "CUMA" came out as CU / MA. Wrapping each word in its own
+     inline-block makes the word the smallest unit that can move to the next
+     line, and word-spacing carries the gap that the removed spaces leave. */
+  while (h1El.firstChild) h1El.removeChild(h1El.firstChild);
+  glyphs.length = 0;
+
+  text.split(/\s+/).forEach(function (word) {
+    if (!word) return;
+    const w = document.createElement('span');
+    w.style.display = 'inline-block';
+    w.style.whiteSpace = 'nowrap';
+    Array.from(word).forEach(function (ch) {
+      const s = document.createElement('span');
+      s.textContent = ch;
+      s.style.display = 'inline-block';
+      s.style.willChange = 'transform,opacity';
+      w.appendChild(s);
+      glyphs.push(s);
+    });
+    h1El.appendChild(w);
+  });
+}
+
+/* ---- grain: dust and ink specks, reseeded every two frames --------------- */
+const fx = document.getElementById('fx');
+const fxc = fx.getContext('2d');
+function drawGrain(frame) {
+  fxc.clearRect(0, 0, 1080, 1920);
+  const r = rng(1000 + Math.floor(frame / 2));
+  fxc.fillStyle = 'rgba(255,248,235,0.72)';
+  for (let i = 0; i < 620; i++) {
+    fxc.beginPath(); fxc.arc(r() * 1080, r() * 1920, 0.5 + r() * 1.7, 0, 7); fxc.fill();
+  }
+  fxc.fillStyle = 'rgba(26,26,46,0.22)';
+  for (let i = 0; i < 110; i++) {
+    fxc.beginPath(); fxc.arc(r() * 1080, r() * 1920, 0.5 + r() * 1.2, 0, 7); fxc.fill();
+  }
+}
+
+/* ---- the frame: one pure function of t ---------------------------------- */
+const boilT = document.getElementById('boilT');
+const stampT = document.getElementById('stampT');
+const wipeEl = document.getElementById('wipe');
+const recDot = document.getElementById('rec_dot');
+const FPS = 30;
+
+window.__umpRender = function (t) {
+  /* line boil: the drawing is redrawn ~10 times a second, so strokes breathe */
+  boilT.setAttribute('seed', String(1 + (Math.floor(t * 10) % 40)));
+  stampT.setAttribute('seed', String(11 + (Math.floor(t * 7) % 30)));
+
+  drawGrain(Math.round(t * FPS));
+
+  /* the current beat, its progress, and the beat after it */
+  const bi = currentBeat(t);
+  const cur = beats[bi];
+  const p = seg(t, cur.t0, cur.t0 + 0.42);
+  const isLast = bi === beats.length - 1;
+
+  if (bi !== plateIndex) {
+    plateIndex = bi;
+    plateGroup.textContent = '';
+    (EXHIBIT_DRAWERS[bi % EXHIBIT_DRAWERS.length])(plateGroup);
+    exLabel.textContent = 'EXHIBIT ' + String.fromCharCode(65 + (bi % 5));
+    exNum.firstChild.textContent = String(bi + 1).padStart(2, '0');
+    exNum.lastChild.textContent = String(bi + 1).padStart(2, '0');
+    buildHeadline(cur.card.headline || cur.card.tag);
+    pillTxt.textContent = cur.card.body || cur.card.tag;
+  }
+
+  /* ---- exhibit: rises with overshoot, then settles on a damped spring --- */
+  const cardIn = pop(t, cur.t0, 0.42);
+  const cardSpring = spring(t, cur.t0 + 0.42, 0.0);
+  setT(exCard, 0, lerp(90, 0, cardIn), lerp(0.94, 1, cardIn) * cardSpring);
+  setO(exCard, clamp(seg(t, cur.t0, cur.t0 + 0.22)));
+
+  /* ---- stamp: slams from 2.6x in 90 ms, then a small damped rebound ------ */
+  const sIn = seg(t, cur.t0 + 0.30, cur.t0 + 0.39);
+  const slam = t < cur.t0 + 0.30 ? 0 : (sIn < 1 ? lerp(2.6, 1, E.in(sIn)) : 1 + 0.09 * Math.sin((t - cur.t0 - 0.39) * 34) * Math.exp(-(t - cur.t0 - 0.39) * 13));
+  setT(exStamp, 0, 0, slam, -9);
+  setO(exStamp, t < cur.t0 + 0.30 ? 0 : 0.93);
+
+  /* ---- headline: glyphs drop and squash in, staggered ------------------- */
+  const n = Math.max(1, glyphs.length);
+  glyphs.forEach(function (g, i) {
+    const dt = i * 0.045;
+    const q = seg(t, cur.t0 + 0.10 + dt, cur.t0 + 0.10 + dt + 0.34);
+    if (q <= 0) {
+      g.style.visibility = 'hidden';
+      setO(g, 0);
+      return;
+    }
+    g.style.visibility = 'visible';
+    const drop = lerp(-70, 0, E.back(q));
+    const sq = 1 + 0.16 * (1 - q) * Math.cos(q * Math.PI);
+    const idle = q >= 1 ? Math.sin(t * 1.7 + i * 0.35) * 0.6 : 0;
+    setT(g, 0, q >= 1 ? idle : drop, q >= 1 ? 1 : 1 / sq, 0, q >= 1 ? 1 : sq);
+    setO(g, clamp(q * 2.2));
+  });
+
+  /* ---- caption pill: pops after the headline, then breathes ------------- */
+  const cIn = pop(t, cur.t0 + 0.34, 0.40);
+  const breathe = 1 + 0.004 * Math.sin(t * 2.4);
+  setT(beatEl, 0, lerp(80, 0, cIn), lerp(0.92, 1, cIn) * breathe);
+  setO(beatEl, clamp(seg(t, cur.t0 + 0.34, cur.t0 + 0.50)));
+
+  /* the last card never leaves the frame */
+  if (isLast) {
+    const holdIn = seg(t, cur.t0 + 0.34, cur.t0 + 0.50);
+    setO(beatEl, Math.max(clamp(holdIn), clamp(seg(t, cur.t1 - 0.3, cur.t1 - 0.1))));
+    setO(headlineEl, 1);
+  } else {
+    setO(headlineEl, 1);
+  }
+
+  /* ---- transitions: a dot wipe covers the cut, timed to the next beat --- */
+  const next = beats[bi + 1];
+  let wipeScale = 0, wipeOpacity = 0, wipeOrigin = 'left top';
+  if (next) {
+    const cut = next.t0;
+    if (t >= cut - 0.62 && t < cut - 0.38) {
+      wipeOpacity = 1; wipeOrigin = 'left top';
+      wipeScale = E.in(seg(t, cut - 0.62, cut - 0.38));
+    } else if (t >= cut - 0.38 && t < cut - 0.12) {
+      wipeOpacity = 1; wipeScale = 1;
+    } else if (t >= cut - 0.12 && t < cut + 0.14) {
+      wipeOpacity = 1; wipeOrigin = 'right bottom';
+      wipeScale = 1 - E.out(seg(t, cut - 0.12, cut + 0.14));
+    }
+  }
+  wipeEl.style.opacity = wipeOpacity ? '1' : '0';
+  wipeEl.style.transformOrigin = wipeOrigin;
+  wipeEl.style.transform = 'scale(' + wipeScale.toFixed(4) + ')';
+
+  /* ---- idle life that never stops -------------------------------------- */
+  recDot.style.opacity = (0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 5.2))).toFixed(3);
+  /* the summary numeral sits behind the plate and drifts a little */
+  const drift = Math.sin(t * 0.55) * 6;
+  exNum.style.transform = 'translate(' + drift.toFixed(2) + 'px,' + (drift * 0.4).toFixed(2) + 'px)';
+  /* the dot fields creep, so the background is never dead */
+  document.getElementById('ht_a').style.transform = 'translate(' + (-26 * (t / DURATION)).toFixed(2) + 'px,0)';
+  document.getElementById('ht_b').style.transform = 'translate(' + (18 * (t / DURATION)).toFixed(2) + 'px,0)';
+  /* the HUD rule draws once, then holds */
+  const ruleIn = E.out(seg(t, 0.1, 0.62));
+  document.getElementById('rule').style.transformOrigin = 'left center';
+  document.getElementById('rule').style.transform = 'scaleX(' + ruleIn.toFixed(4) + ')';
+  const hudIn = pop(t, 0, 0.45);
+  setT(document.getElementById('hud'), 0, lerp(-40, 0, hudIn), 1);
+
+  return true;
+};
+
+/* HyperFrames seeks a GSAP timeline, so the timeline's only job is to call the
+   frame function at the right moment. One tween spans the film; the picture
+   itself is computed from t and does not depend on tween history. */
+const tl = gsap.timeline({ paused: true });
+const frameState = { t: 0 };
+tl.to(frameState, {
+  t: DURATION, duration: DURATION, ease: 'none',
+  onUpdate: function () { window.__umpRender(frameState.t); }
+}, 0);
+tl.set(frameState, { t: 0, onComplete: function () { window.__umpRender(0); } }, 0);
+tl.duration(DURATION);
+window.__timelines = { root: tl };
+
+</script></body></html>
