@@ -249,6 +249,13 @@ function figure(g, x, y, h, opts) {
   return grp;
 }
 
+/* the bus door: 0 closed, 1 open. The opening is eased so it does not pop. */
+function busDoor(t, t0, hold) {
+  const openIn = clamp((t - t0) / 0.42);
+  const openOut = clamp((t - t0 - 0.42 - (hold || 1.6)) / 0.42);
+  return E.io(openIn) * (1 - E.io(openOut));
+}
+
 /* a group of people at a spread of heights; deterministic per seed */
 function crowd(g, x, y, count, opts) {
   const o = opts || {};
@@ -257,9 +264,64 @@ function crowd(g, x, y, count, opts) {
   for (let i = 0; i < count; i++) {
     const px = x + i * (o.gap || 34) + (r() - 0.5) * 12;
     const h = (o.h || 54) * (0.88 + r() * 0.24);
-    out.push(figure(g, px, y + (r() - 0.5) * 8, h, { seed: (o.seed || 1) + i, arm: (r() - 0.5) * 10 }));
+    out.push({
+      node: figure(g, px, y + (r() - 0.5) * 8, h, { seed: (o.seed || 1) + i, arm: (r() - 0.5) * 10 }),
+      x: px, y: y + (r() - 0.5) * 8, h: h, phase: r() * 6.28, speed: 2.6 + r() * 1.8,
+      wander: o.wander || 0
+    });
   }
   return out;
+}
+
+/* The beat lasts six to ten seconds, so an entrance expressed as a slice of the
+   beat is four seconds long and the eye never sees it happen. Entrances get
+   their own clock: the first ENTER_SEC of the beat, then the picture holds. */
+const ENTER_SEC = 1.1;
+function beatIn(t, t0) { return clamp((t - t0) / ENTER_SEC); }
+
+/* A walk you can actually see: the body rises and falls, and the swing is large
+   enough to read at plate size. A three-pixel bob over two seconds is a still. */
+function walk(people, t) {
+  people.forEach(function (f) {
+    const w = t * (f.speed || 3.0) + f.phase;
+    f.node.setAttribute('transform',
+      'translate(' + (f.x + (f.wander ? Math.sin(w * 0.55) * f.wander : 0)).toFixed(2) +
+      ' ' + (f.y - Math.abs(Math.sin(w)) * 7).toFixed(2) + ') scale(1,' + (1 + Math.sin(w * 2) * 0.035).toFixed(4) + ')');
+  });
+}
+
+/* A passenger who boards: walks from where they stand to the open door, gets
+   smaller as they step up into it, and is gone once inside. The beat's own
+   timeline drives it, so a long beat simply gives a longer walk. */
+function boarder(g, x0, y0, xDoor, h, opts) {
+  const o = opts || {};
+  const node = figure(g, x0, y0, h, { seed: o.seed || 7, fill: o.fill || 'var(--accent)' });
+  return {
+    node: node,
+    update: function (t, t0, openAt, rideAt) {
+      const walkIn = clamp((t - (t0 + openAt)) / Math.max(0.2, rideAt - openAt));
+      const x = lerp(x0, xDoor, walkIn);
+      const y = lerp(y0, y0 - h * 0.30, walkIn);
+      const s = lerp(1, 0.62, walkIn);
+      node.setAttribute('transform',
+        'translate(' + x.toFixed(2) + ' ' + y.toFixed(2) + ') scale(' + s.toFixed(3) + ')');
+      node.style.opacity = walkIn >= 1 ? '0' : '1';
+    }
+  };
+}
+
+/* A crowd that sways as a body: the whole group leans and settles, each member
+   with its own phase, so it reads as waiting rather than as a still photograph
+   with a few jogged pixels. */
+function sway(people, t, amount) {
+  const a = amount === undefined ? 1 : amount;
+  people.forEach(function (f) {
+    const w = t * (0.9 + f.speed * 0.08) + f.phase;
+    f.node.setAttribute('transform',
+      'translate(' + (f.x + Math.sin(w) * 2.4 * a).toFixed(2) + ' ' +
+      (f.y - Math.abs(Math.sin(w * 1.7)) * 3.5 * a).toFixed(2) + ') rotate(' +
+      (Math.sin(w) * 1.6 * a).toFixed(2) + ' ' + f.x.toFixed(1) + ' ' + (f.y + 10).toFixed(1) + ')');
+  });
 }
 
 /* a Transjakarta-style bus, side on */
@@ -267,6 +329,7 @@ function bus(g, x, y, len, opts) {
   const o = opts || {};
   const h = len * 0.42;
   const ink = 'var(--ink)';
+  g = el('g', {}, g);
   el('rect', { x: x, y: y - h, width: len, height: h, rx: len * 0.05,
     fill: o.fill || 'var(--overprint)', stroke: ink, 'stroke-width': 5 }, g);
   /* windscreen and the long window band */
@@ -282,13 +345,22 @@ function bus(g, x, y, len, opts) {
   }
   /* livery stripe and a door */
   el('rect', { x: x, y: y - h * 0.34, width: len, height: h * 0.10, fill: 'var(--accent)' }, g);
-  el('rect', { x: x + len * 0.50, y: y - h * 0.90, width: len * 0.10, height: h * 0.58,
-    fill: 'var(--ink)', opacity: 0.8 }, g);
+  /* two door leaves that slide apart; they are the one part of the bus that moves */
+  const doorW = len * 0.10;
+  /* the opening behind the doors: without it, two dark leaves on a dark body
+     sliding apart is invisible, and the door reads as never opening */
+  el('rect', { x: x + len * 0.50, y: y - h * 0.90, width: doorW, height: h * 0.58,
+    fill: 'var(--paper_hi)', stroke: ink, 'stroke-width': 2 }, g);
+  const leafA = el('rect', { x: x + len * 0.50, y: y - h * 0.90, width: doorW / 2, height: h * 0.58,
+    fill: 'var(--ink)', opacity: 0.85 }, g);
+  const leafB = el('rect', { x: x + len * 0.50 + doorW / 2, y: y - h * 0.90, width: doorW / 2, height: h * 0.58,
+    fill: 'var(--ink)', opacity: 0.85 }, g);
   /* wheels */
   [0.20, 0.78].forEach(function (k) {
     el('circle', { cx: x + len * k, cy: y, r: h * 0.19, fill: 'var(--ink)' }, g);
     el('circle', { cx: x + len * k, cy: y, r: h * 0.08, fill: 'var(--paper_hi)' }, g);
   });
+  return { node: g, leafA: leafA, leafB: leafB, doorW: doorW };
 }
 
 /* a tree: trunk plus two foliage discs, drawn in the plate's own palette */
@@ -323,16 +395,29 @@ function windows(g, x, y, w, h, opts) {
   const cols = Math.max(2, Math.floor(w / 34));
   const rows = Math.max(2, Math.floor(h / 40));
   const cw = w / cols, ch = h / rows;
+  const cells = [];
   for (let cy = 0; cy < rows; cy++) {
     for (let cx = 0; cx < cols; cx++) {
       const lit = r() > 0.42;
-      el('rect', {
+      const node = el('rect', {
         x: x + cx * cw + cw * 0.22, y: y - h + cy * ch + ch * 0.20,
         width: cw * 0.56, height: ch * 0.52,
         fill: lit ? 'var(--secondary)' : 'var(--overprint)', opacity: lit ? 0.95 : 0.30
       }, g);
+      cells.push({ node: node, lit: lit, phase: r() * 6.28 });
     }
   }
+  return cells;
+}
+
+/* Windows that come on and go off: a city at night, not a printed diagram.
+   Each window owns a phase, so they never switch together. */
+function flicker(cells, t) {
+  cells.forEach(function (c) {
+    const on = c.lit ? (0.72 + 0.28 * Math.sin(t * 0.8 + c.phase))
+                     : (0.18 + 0.22 * Math.max(0, Math.sin(t * 0.5 + c.phase * 2)));
+    c.node.setAttribute('opacity', on.toFixed(3));
+  });
 }
 
 const EXHIBIT_DRAWERS = [
@@ -347,15 +432,36 @@ const EXHIBIT_DRAWERS = [
     el('rect', { x: 150, y: 396, width: 250, height: 12, fill: 'var(--ink)' }, g);
     el('rect', { x: 120, y: 330, width: 60, height: 46, fill: 'var(--paper_hi)', stroke: 'var(--ink)', 'stroke-width': 3 }, g);
     /* people under the shelter and at the kerb, at mixed heights */
-    crowd(g, 168, 470, 4, { seed: 11, gap: 46, h: 92 });
-    crowd(g, 510, 470, 2, { seed: 23, gap: 40, h: 100 });
+    const people = crowd(g, 168, 470, 4, { seed: 11, gap: 46, h: 92 });
+    const waiting = crowd(g, 510, 470, 2, { seed: 23, gap: 40, h: 100 });
+    people.push.apply(people, waiting);
     /* the bus pulling in */
-    bus(g, 520, 470, 300, {});
+    const busG = bus(g, 520, 470, 300, {});
+    const busNode = busG.node, leafA = busG.leafA, leafB = busG.leafB, doorW = busG.doorW;
+    /* one passenger breaks from the crowd and gets on, then a second */
+    const riders = [
+      boarder(g, 470, 470, 640, 96, { seed: 91 }),
+      boarder(g, 500, 470, 646, 88, { seed: 57, fill: 'var(--secondary)' })
+    ];
     tree(g, 762, 470, 150, { seed: 5 });
     windows(g, 90, 300, 340, 44, { seed: 5 });
     /* the route line runs behind everything, with the stop marked */
     el('path', { d: 'M60 214 L800 214', stroke: 'var(--overprint)', 'stroke-width': 4, 'stroke-dasharray': '16 12' }, g);
     el('circle', { cx: 280, cy: 214, r: 13, fill: 'var(--accent)', stroke: 'var(--ink)', 'stroke-width': 3 }, g);
+
+    return function (t, t0) {
+      sway(people, t, 1);
+      /* the bus rolls the last stretch into the bay, then its doors part */
+      const arrive = E.out(clamp(beatIn(t, t0) / 0.7));
+      const roll = lerp(230, 0, arrive);
+      busNode.setAttribute('transform', 'translate(' + roll.toFixed(2) + ' 0)');
+      /* doors open at the kerb, the passengers get on, the doors close again */
+      const open = busDoor(t, t0 + 0.85, 3.2);
+      leafA.setAttribute('transform', 'translate(' + (-open * doorW * 0.55).toFixed(2) + ' 0)');
+      leafB.setAttribute('transform', 'translate(' + (open * doorW * 0.55).toFixed(2) + ' 0)');
+      riders[0].update(t, t0, 1.1, 3.0);
+      riders[1].update(t, t0, 1.8, 3.6);
+    };
   },
 
   /* 02 — the name: an archival document, the letterhead building it came from */
@@ -365,16 +471,28 @@ const EXHIBIT_DRAWERS = [
       stroke: 'var(--ink)', 'stroke-width': 5 }, g);
     el('rect', { x: 120, y: 90, width: 620, height: 54, fill: 'var(--overprint)' }, g);
     /* ruled lines of a typed citation */
+    const lines = [], baseW = [];
     for (let i = 0; i < 7; i++) {
-      el('rect', { x: 158, y: 180 + i * 34, width: 300 + (i % 3) * 90, height: 7,
-        fill: 'var(--ink)', opacity: 0.34 }, g);
+      const w0 = 300 + (i % 3) * 90;
+      baseW.push(w0);
+      lines.push(el('rect', { x: 158, y: 180 + i * 34, width: w0, height: 7,
+        fill: 'var(--ink)', opacity: 0.34 }, g));
     }
     /* the building the name came from, stamped over the card's corner */
-    building(g, 452, 480, 220, 210, { seed: 7, fill: 'var(--paper_hi)' });
-    crowd(g, 300, 480, 3, { seed: 31, gap: 44, h: 78 });
+    const city = building(g, 452, 480, 220, 210, { seed: 7, fill: 'var(--paper_hi)' });
+    const people = crowd(g, 300, 480, 3, { seed: 31, gap: 44, h: 78, wander: 9 });
     tree(g, 200, 480, 120, { seed: 9 });
-    windows(g, 470, 480, 200, 200, { seed: 12 });
+    const cityWin = windows(g, 470, 480, 200, 200, { seed: 12 });
     el('rect', { x: 90, y: 478, width: 700, height: 10, fill: 'var(--ink)' }, g);
+    return function (t, t0) {
+      walk(people, t);
+      /* the record gets written: lines appear one after another, then hold */
+      lines.forEach(function (line, i) {
+        const q = clamp(beatIn(t, t0) - i * 0.07);
+        line.setAttribute('width', String(Math.max(1, baseW[i] * q)));
+      });
+      flicker(cityWin, t);
+    };
   },
 
   /* 03 — five floors: a cutaway stack with people on each deck */
@@ -383,26 +501,42 @@ const EXHIBIT_DRAWERS = [
     const base = 500;
     const fh = 74;
     const left = 170, right = 690;
+    /* the decks are drawn first and the people last: drawn in loop order, each
+       figure sat inside the slab that came after it and was hidden by it */
+    const people = [];
     for (let i = 0; i < floors; i++) {
       const y = base - i * fh;
       const lit = i === 1;
       el('rect', { x: left, y: y - fh, width: right - left, height: fh,
         fill: lit ? 'var(--accent)' : 'var(--paper_hi)', stroke: 'var(--ink)', 'stroke-width': 4 }, g);
-      /* the deck slab */
       el('rect', { x: left - 16, y: y - 8, width: right - left + 32, height: 9, fill: 'var(--ink)' }, g);
-      /* people standing on the deck above, smaller with height */
+      el('text', { x: left - 40, y: y - fh * 0.28, 'text-anchor': 'end', fill: 'var(--ink)',
+        'font-family': 'Courier New,monospace', 'font-weight': 800, 'font-size': 32 }, g).textContent = String(i + 1);
+    }
+    /* standing on the slab means the feet sit on the deck line, so the body
+       rises out of the storey above it */
+    for (let i = 0; i < floors; i++) {
+      const y = base - i * fh;
       const count = 5 - Math.floor(i / 2);
       for (let k = 0; k < count; k++) {
         const px = left + 48 + k * ((right - left - 96) / Math.max(1, count - 1));
-        figure(g, px, y - fh + 52, 46, { seed: (i + 1) * 17 + k, arm: (k % 2 ? 5 : -5) });
+        people.push({
+          node: figure(g, px, y - 8, 52, { seed: (i + 1) * 17 + k, arm: (k % 2 ? 5 : -5) }),
+          x: px, y: y - 8, h: 52, phase: k * 1.7 + i, speed: 2.2 + k * 0.4, wander: 18
+        });
       }
-      /* floor number */
-      el('text', { x: left - 40, y: y - fh * 0.28, 'text-anchor': 'end', fill: 'var(--ink)',
-        'font-family': 'Courier New,monospace', 'font-weight': 800, 'font-size': 32, textContent: String(i + 1) }, g);
     }
-    /* the bus bay at street level */
-    bus(g, 200, base, 300, { fill: 'var(--overprint)' });
+    /* the bus bay at street level, drawn behind the crowd */
+    const streetBus = bus(g, 200, base, 300, { fill: 'var(--overprint)' });
     el('rect', { x: 120, y: base, width: 640, height: 10, fill: 'var(--ink)' }, g);
+    return function (t, t0) {
+      walk(people, t);
+      const roll = lerp(250, 0, E.out(clamp(beatIn(t, t0) / 0.6)));
+      streetBus.node.setAttribute('transform', 'translate(' + roll.toFixed(2) + ' 0)');
+      const open = busDoor(t, t0 + 0.7, 2.4);
+      streetBus.leafA.setAttribute('transform', 'translate(' + (-open * streetBus.doorW * 0.55).toFixed(2) + ' 0)');
+      streetBus.leafB.setAttribute('transform', 'translate(' + (open * streetBus.doorW * 0.55).toFixed(2) + ' 0)');
+    };
   },
 
   /* 04 — the loop: a section through the building, the walkway ringing it */
@@ -413,20 +547,39 @@ const EXHIBIT_DRAWERS = [
     el('path', { d: 'M160 380 L700 380', stroke: 'var(--overprint)', 'stroke-width': 26 }, g);
     el('path', { d: 'M160 380 L700 380', stroke: 'var(--ink)', 'stroke-width': 3, 'stroke-dasharray': '14 10' }, g);
     /* people walking the loop, all facing the same way round */
-    crowd(g, 220, 380, 6, { seed: 41, gap: 72, h: 66 });
+    const people = crowd(g, 220, 380, 6, { seed: 41, gap: 72, h: 66, wander: 14 });
     /* the arrows that say it is a loop, not a line */
-    [[300, 400], [560, 400], [430, 352]].forEach(function (p, i) {
-      const dir = i === 2 ? 'M-14 0 L14 0' : 'M14 0 L-14 0';
-      el('path', { d: dir, stroke: 'var(--accent)', 'stroke-width': 7, 'stroke-linecap': 'round',
-        transform: 'translate(' + p[0] + ' ' + p[1] + ')' }, g);
+    const arrows = [];
+    [[300, 400, 'l'], [560, 400, 'r'], [430, 352, 'r']].forEach(function (pt) {
+      const dir = pt[2] === 'r' ? 'M-14 0 L14 0' : 'M14 0 L-14 0';
+      const a = el('path', { d: dir, stroke: 'var(--accent)', 'stroke-width': 7, 'stroke-linecap': 'round',
+        transform: 'translate(' + pt[0] + ' ' + pt[1] + ')' }, g);
+      a.dataset.x = String(pt[0]); a.dataset.y = String(pt[1]); a.dataset.dir = pt[2];
+      arrows.push(a);
     });
     /* the halte at the top deck */
     el('rect', { x: 300, y: 150, width: 260, height: 44, fill: 'var(--secondary)', stroke: 'var(--ink)', 'stroke-width': 4 }, g);
     crowd(g, 350, 194, 2, { seed: 53, gap: 54, h: 52 });
     /* the outer wall, glazed */
-    windows(g, 176, 340, 508, 150, { seed: 44 });
+    const wallWin = windows(g, 176, 340, 508, 150, { seed: 44 });
+    /* a soft band of shade from something passing outside the frame */
+    const shade = el('rect', { x: -240, y: 140, width: 230, height: 370, fill: 'var(--overprint)',
+      opacity: 0.16 }, g);
     /* ground */
     el('rect', { x: 120, y: 498, width: 620, height: 11, fill: 'var(--ink)' }, g);
+    return function (t, t0) {
+      /* the walkway never empties: people keep moving around the loop */
+      walk(people, t);
+      /* the arrows slide along the band, so the loop reads as circulation */
+      arrows.forEach(function (a, i) {
+        const dirn = a.dataset.dir === 'r' ? 1 : -1;
+        const x = Number(a.dataset.x) + dirn * ((t * 42) % 140);
+        a.setAttribute('transform', 'translate(' + x.toFixed(2) + ' ' + a.dataset.y + ')');
+      });
+      flicker(wallWin, t);
+      /* the shade sweeps across once every eight seconds */
+      shade.setAttribute('x', String(((t * 130) % 1100) - 240));
+    };
   },
 
   /* 05 — the corridor over time: a street that changes, three eras */
@@ -446,11 +599,39 @@ const EXHIBIT_DRAWERS = [
     el('path', { d: 'M60 500 L800 500 L560 420 L300 420 Z', fill: 'var(--overprint)', opacity: 0.35 }, g);
     el('path', { d: 'M60 500 L800 500', stroke: 'var(--ink)', 'stroke-width': 6 }, g);
     /* a bus up the street and people on the pavement */
-    bus(g, 380, 424, 150, { fill: 'var(--accent)' });
-    crowd(g, 120, 500, 3, { seed: 71, gap: 40, h: 86 });
-    crowd(g, 640, 500, 2, { seed: 83, gap: 38, h: 74 });
+    const streetBus = bus(g, 380, 424, 150, { fill: 'var(--accent)' });
+    const cars = [];
+    for (let i = 0; i < 4; i++) {
+      const c = el('g', {}, g);
+      el('rect', { x: 0, y: 486, width: 52, height: 16, rx: 5, fill: i % 2 ? 'var(--secondary)' : 'var(--paper_hi)',
+        stroke: 'var(--ink)', 'stroke-width': 2.5 }, c);
+      el('rect', { x: 10, y: 478, width: 30, height: 10, rx: 3, fill: 'var(--overprint)', stroke: 'var(--ink)', 'stroke-width': 2 }, c);
+      cars.push(c);
+    }
+    const peds = crowd(g, 120, 500, 3, { seed: 71, gap: 40, h: 86, wander: 12 });
+    peds.push.apply(peds, crowd(g, 640, 500, 2, { seed: 83, gap: 38, h: 74, wander: 10 }));
     tree(g, 740, 500, 140, { seed: 13 });
     tree(g, 62, 500, 120, { seed: 19 });
+    /* lamps on the kerb: glows that pulse on different phases */
+    const lamps = [110, 300, 520, 720].map(function (lx, i) {
+      return el('circle', { cx: lx, cy: 452, r: 11, fill: 'var(--secondary)',
+        stroke: 'var(--ink)', 'stroke-width': 2 }, g);
+    });
+    return function (t, t0) {
+      walk(peds, t);
+      lamps.forEach(function (lamp, i) {
+        lamp.setAttribute('opacity', (0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * 2.1 + i * 1.3))).toFixed(3));
+        lamp.setAttribute('r', String((9 + 3 * (0.5 + 0.5 * Math.sin(t * 2.1 + i * 1.3))).toFixed(2)));
+      });
+      /* the street keeps moving: a bus crosses the whole frame, then again */
+      const span = 900;
+      const run = (t * 58) % span;
+      streetBus.node.setAttribute('transform', 'translate(' + (run - 340).toFixed(2) + ' 0)');
+      for (let i = 0; i < 4; i++) {
+        const q = (t * 96 + i * 230) % span;
+        cars[i].setAttribute('transform', 'translate(' + (q - 300).toFixed(2) + ' 0)');
+      }
+    };
   }
 ];
 
@@ -530,6 +711,7 @@ const beats = CARDS_DATA.map(function (c, i) {
 
 /* the exhibit plate is rebuilt only when the beat changes, not every frame */
 let plateIndex = -1;
+let plateUpdate = null;
 const plateSvg = el('svg', { viewBox: '0 0 860 620', preserveAspectRatio: 'xMidYMid meet' });
 exDraw.appendChild(plateSvg);
 const plateGroup = el('g', {});
@@ -608,12 +790,19 @@ window.__umpRender = function (t) {
   if (bi !== plateIndex) {
     plateIndex = bi;
     plateGroup.textContent = '';
-    (EXHIBIT_DRAWERS[bi % EXHIBIT_DRAWERS.length])(plateGroup);
+    /* the plate is built once, and returns how to move its parts */
+    plateUpdate = (EXHIBIT_DRAWERS[bi % EXHIBIT_DRAWERS.length])(plateGroup);
     exLabel.textContent = 'EXHIBIT ' + String.fromCharCode(65 + (bi % 5));
     exNum.firstChild.textContent = String(bi + 1).padStart(2, '0');
     exNum.lastChild.textContent = String(bi + 1).padStart(2, '0');
     buildHeadline(cur.card.headline || cur.card.tag);
     pillTxt.textContent = cur.card.body || cur.card.tag;
+  }
+
+  /* the plate keeps moving for the whole beat: people walk, the bus arrives,
+     doors open, traffic crosses. p is the beat's progress, 0 to 1. */
+  if (typeof plateUpdate === 'function') {
+    plateUpdate(t, cur.t0);
   }
 
   /* ---- exhibit: rises with overshoot, then settles on a damped spring --- */

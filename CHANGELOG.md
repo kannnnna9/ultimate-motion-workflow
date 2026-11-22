@@ -2,6 +2,17 @@
 
 Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) dan [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Plate exhibit hidup: setiap plate adalah fungsi `(t, t0)` dan menggerakkan bagiannya sendiri tiap frame. Penumpang berjalan dari kerumunan ke pintu bus, mengecil saat naik, lalu hilang; pintu terbuka dan menutup lagi. Kerumunan bergoyang sebagai satu badan. Jendela gedung menyala-padam dengan fase berbeda. Pita bayangan melintas di dinding kaca. Lampu jalan berdenyut. Bus dan empat mobil melintas di plate 5.
+- Test gerak dari piksel (`tests/test_halftone_motion_pixels.py`) plus `tests/support/still.mjs`: merender dua momen per beat dengan grain dan boil dimatikan, lalu menuntut perbedaan rata-rata di atas ambang. Test unit tetap cepat karena suite ini hanya jalan dengan `UMP_BROWSER=1`.
+
+### Fixed
+- Jam masuk plate memakai `beatIn()` (1,1 detik pertama beat), bukan progres beat. Dengan progres beat, bus bergerak 0,46 px dari 230 px dan plate terbaca diam — tanpa satu pun error.
+- Sosok plate 3 digambar setelah dek lantai. Sebelumnya setiap sosok tertimpa slab di atasnya: DOM melaporkan 21 sosok, layar kosong.
+- Pintu bus diberi lubang berlatar kertas di belakang daun. Daun gelap di atas bodi gelap yang bergeser 16 px sama saja dengan pintu yang tidak pernah terbuka.
+
 ## [1.4.0] - 2026-11-22
 
 ### Added

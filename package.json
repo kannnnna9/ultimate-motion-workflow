@@ -1,0 +1,8 @@
+{
+  "name": "ultimate-motion-workflow-test",
+  "private": true,
+  "description": "Test-only dependency. The pixel motion suite (tests/test_halftone_motion_pixels.py) renders stills through Playwright; the renderer itself has no npm dependency.",
+  "dependencies": {
+    "playwright-core": "^1.65.1"
+  }
+}
