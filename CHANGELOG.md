@@ -2,7 +2,7 @@
 
 Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) dan [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.4.0] - 2026-11-22
 
 ### Added
 - Preset `halftone-dossier`: berkas arsip cetak — kertas krem, halftone dua lapis dengan sudut layar 30°/15°, headline serif berat dengan bayangan misregister, stempel yang menghantam, dan lima plate exhibit. Port dari spesifikasi `lemo-opuscar/styles/halftone-dossier/STYLE.md` (CC-BY-NC-4.0, hanya spesifikasi dan rumus; tidak ada kode yang disalin).
@@ -14,7 +14,13 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 - Per-glyph headline: tiap huruf jatuh, mengempis dengan volume terjaga (`scale(1/sq, sq)`), lalu memantul.
 - Grain per-frame: bintik kertas dan tinta di-seed ulang setiap dua frame, jadi tidak ada dua frame yang identik.
 
+- Ilustrasi pada plate: sosok manusia (jas, kepala, penutup kepala, lengan berayun), kerumunan dengan tinggi berbeda, bus Transjakarta, pohon, dan gedung dengan jendela menyala. Semua digambar dari geometri murni dengan seed tetap.
+
 ### Fixed
+- Headline dirender dari satu lapis teks dengan `text-shadow`, bukan dua lapis DOM. Lapis bayangan yang absolut menumpuk semua huruf di satu titik dan menyisakan huruf yatim seperti "W" di bawah headline.
+- Glyph dibungkus per kata. Glyph `inline-block` yang lepas membuat baris patah di tengah kata ("CU MA", "BANY AK").
+- `el()` kembali menerima induk. Tanpa itu setiap bentuk dibuat tapi tidak pernah ditempelkan: plate tampil sebagai kotak kosong tanpa satu pun error.
+- `figure()` menerapkan `translate(x, y)`. Sebelumnya semua sosok digambar di titik nol, menumpuk di pojok plate, dan tidak terlihat di frame.
 - `scripts/render.py` membaca `draws_captions` dari `styles/<style_id>/preset.json`; `style_id` diambil dari `brand.json` atau `--style`. Saat merender proyek dari `--project`, style yang dibangunkan bisa berbeda dari `brand.json`, jadi `--style` harus disebut eksplisit.
 
 ## [1.3.0] - 2026-11-22

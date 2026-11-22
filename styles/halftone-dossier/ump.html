@@ -58,7 +58,8 @@ html,body{width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
 #headline{position:absolute;left:96px;right:96px;top:1180px;z-index:35;opacity:0}
 #headline h1{position:relative;isolation:isolate;font:900 108px/1.02 Georgia,'Times New Roman',serif;color:var(--ink);
   letter-spacing:-.01em;text-transform:uppercase}
-#headline h1 .sh{position:absolute;left:8px;top:8px;color:var(--overprint);z-index:-1;opacity:.85}
+#headline h1 .fg span{text-shadow:8px 8px 0 rgba(46,77,167,.85)}
+#headline h1 .fg > span:not(:last-child){margin-right:0.26em}
 
 /* ---- caption bar: the pill that carries the spoken line ---- */
 #beat{position:absolute;left:96px;right:96px;bottom:150px;z-index:40;opacity:0;text-align:center}
@@ -105,7 +106,7 @@ html,body{width:1080px;height:1920px;overflow:hidden;background:var(--ground)}
     <svg id="ex_stamp" viewBox="0 0 420 120" width="420" height="120"><g id="stamp_g"></g></svg>
   </div>
 
-  <div id="headline"><h1><span class="sh" data-layout-ignore></span><span class="fg"></span></h1></div>
+  <div id="headline"><h1><span class="fg"></span></h1></div>
   <div id="beat"><div class="pill"><span class="txt"></span></div></div>
 </div>
 <div id="cards" style="display:none">__UMP_CARDS__</div>
@@ -124,7 +125,6 @@ const CARDS_DATA = Array.prototype.map.call(document.querySelectorAll('#cards .b
   };
 });
 const h1El = document.querySelector('#headline h1 .fg');
-const h1Sh = document.querySelector('#headline h1 .sh');
 const headlineEl = document.getElementById('headline');
 const pillEl = document.querySelector('#beat .pill');
 const pillTxt = document.querySelector('#beat .pill .txt');
@@ -193,63 +193,264 @@ const dotsB = halftone(document.getElementById('ht_b'),
    chart, a floor stack, a section cut and a timeline. All drawn from rects and
    lines, so they stay deterministic and carry no external assets. ---- */
 const NS = 'http://www.w3.org/2000/svg';
-function el(name, attrs) {
+function el(name, attrs, parent) {
   const n = document.createElementNS(NS, name);
   for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
   return n;
 }
-const EXHIBIT_DRAWERS = [
-  /* 01 route: a halte, a line and a connector */
-  function (g) {
-    g.appendChild(el('rect', { x: 40, y: 300, width: 760, height: 18, fill: 'var(--ink)' }));
-    [120, 300, 480, 660].forEach(function (x) {
-      g.appendChild(el('circle', { cx: x, cy: 309, r: 26, fill: 'var(--paper_hi)', stroke: 'var(--ink)', 'stroke-width': 7 }));
-    });
-    g.appendChild(el('circle', { cx: 480, cy: 309, r: 13, fill: 'var(--accent)' }));
-    g.appendChild(el('rect', { x: 330, y: 120, width: 300, height: 150, fill: 'none', stroke: 'var(--ink)', 'stroke-width': 7 }));
-    g.appendChild(el('path', { d: 'M480 270 L480 292', stroke: 'var(--ink)', 'stroke-width': 7 }));
-    g.appendChild(el('text', { x: 480, y: 208, 'text-anchor': 'middle', fill: 'var(--ink)',
-      'font-family': 'Georgia,serif', 'font-weight': 900, 'font-size': 74 }));
-  },
-  /* 02 organisation: the 1930s body that gave the name */
-  function (g) {
-    g.appendChild(el('rect', { x: 300, y: 90, width: 280, height: 96, fill: 'var(--overprint)' }));
-    [140, 420, 700].forEach(function (x) {
-      g.appendChild(el('path', { d: 'M440 186 L' + x + ' 250', stroke: 'var(--ink)', 'stroke-width': 6 }));
-      g.appendChild(el('rect', { x: x - 110, y: 250, width: 220, height: 84, fill: 'var(--paper_hi)', stroke: 'var(--ink)', 'stroke-width': 6 }));
-    });
-    g.appendChild(el('rect', { x: 60, y: 380, width: 720, height: 10, fill: 'var(--ink)' }));
-  },
-  /* 03 floors: a stack seen from the side */
-  function (g) {
-    const labels = ['5', '4', '3', '2', '1'];
-    labels.forEach(function (n, i) {
-      g.appendChild(el('rect', { x: 120, y: 380 - i * 66, width: 620, height: 56,
-        fill: i === 1 ? 'var(--accent)' : 'var(--paper_hi)', stroke: 'var(--ink)', 'stroke-width': 5 }));
-      g.appendChild(el('text', { x: 96, y: 420 - i * 66, 'text-anchor': 'end', fill: 'var(--ink)',
-        'font-family': 'Courier New,monospace', 'font-weight': 800, 'font-size': 40, textContent: n }));
-    });
-    g.appendChild(el('rect', { x: 120, y: 388, width: 620, height: 14, fill: 'var(--ink)' }));
-  },
-  /* 04 section: a cut through two levels, with people on the upper deck */
-  function (g) {
-    g.appendChild(el('path', { d: 'M80 300 L80 400 L740 400 L740 300', fill: 'none', stroke: 'var(--ink)', 'stroke-width': 8 }));
-    g.appendChild(el('path', { d: 'M80 240 L80 300 L740 300 L740 240', fill: 'none', stroke: 'var(--overprint)', 'stroke-width': 8 }));
-    for (let x = 140; x < 720; x += 120) {
-      g.appendChild(el('circle', { cx: x, cy: 262, r: 11, fill: 'var(--ink)' }));
-      g.appendChild(el('rect', { x: x - 8, y: 274, width: 16, height: 26, fill: 'var(--ink)' }));
+/* ============================ DRAWING KIT ============================
+   Small deterministic shapes built from rects, paths and arcs. Everything is
+   pure geometry with an ink outline and a flat fill, the way the style draws:
+   no gradients, no external assets, no randomness that is not seeded.
+   ==================================================================== */
+
+/* a person: tapered two-tone body, round head, a hat or hair shape, no face */
+function figure(g, x, y, h, opts) {
+  const o = opts || {};
+  const seed = o.seed === undefined ? 1 : o.seed;
+  const r = rng(seed * 7919 + Math.round(x) * 13 + Math.round(y) * 17);
+  const ink = o.ink || 'var(--ink)';
+  /* the coat must differ from the paper behind it, or the figure reads hollow */
+  const palette = ['var(--overprint)', 'var(--accent)', 'var(--secondary)', 'var(--paper_hi)'];
+  const body = o.fill || palette[Math.floor(r() * palette.length)];
+  const headFill = o.headFill || 'var(--paper_hi)';
+  const head = h * 0.19;
+  const shoulder = h * 0.30;
+  /* the figure is drawn around its own origin, so it has to carry the position */
+  const grp = el('g', { transform: 'translate(' + x + ' ' + y + ')' }, g);
+
+  /* body: a tapered coat, wider at the shoulders */
+  el('path', {
+    d: 'M' + (-shoulder * 0.5) + ' 0 L' + (shoulder * 0.5) + ' 0 L' +
+       (shoulder * 0.38) + ' ' + (-h + head) + ' L' + (-shoulder * 0.38) + ' ' + (-h + head) + ' Z',
+    fill: body, stroke: ink, 'stroke-width': 3.2, 'stroke-linejoin': 'round'
+  }, grp);
+  /* head */
+  el('circle', { cx: 0, cy: -h + head * 0.62, r: head * 0.52, fill: headFill, stroke: ink, 'stroke-width': 3.2 }, grp);
+  /* hair, hat or a bun: identity without a face */
+  const kind = Math.floor(r() * 3);
+  if (kind === 0) {
+    el('path', { d: 'M' + (-head * 0.55) + ' ' + (-h + head * 0.45) + ' a' + (head * 0.55) + ' ' + (head * 0.55) + ' 0 0 1 ' +
+      (head * 1.1) + ' 0 Z', fill: ink }, grp);
+  } else if (kind === 1) {
+    el('rect', { x: -head * 0.75, y: -h + head * 0.18, width: head * 1.5, height: head * 0.22, fill: ink }, grp);
+    el('rect', { x: -head * 0.5, y: -h + head * 0.40, width: head, height: head * 0.3, fill: ink }, grp);
+  } else {
+    el('circle', { cx: head * 0.55, cy: -h + head * 0.35, r: head * 0.24, fill: ink }, grp);
+  }
+  /* one arm, swinging: the reason a still figure does not look frozen */
+  const swing = o.arm === undefined ? 0 : o.arm;
+  el('path', {
+    d: 'M' + (shoulder * 0.30) + ' ' + (-h + head + h * 0.06) + ' L' +
+       (shoulder * 0.30 + swing) + ' ' + (-h + head + h * 0.30),
+    stroke: ink, 'stroke-width': 4.5, 'stroke-linecap': 'round', fill: 'none'
+  }, grp);
+  return grp;
+}
+
+/* a group of people at a spread of heights; deterministic per seed */
+function crowd(g, x, y, count, opts) {
+  const o = opts || {};
+  const r = rng((o.seed || 1) * 104729);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const px = x + i * (o.gap || 34) + (r() - 0.5) * 12;
+    const h = (o.h || 54) * (0.88 + r() * 0.24);
+    out.push(figure(g, px, y + (r() - 0.5) * 8, h, { seed: (o.seed || 1) + i, arm: (r() - 0.5) * 10 }));
+  }
+  return out;
+}
+
+/* a Transjakarta-style bus, side on */
+function bus(g, x, y, len, opts) {
+  const o = opts || {};
+  const h = len * 0.42;
+  const ink = 'var(--ink)';
+  el('rect', { x: x, y: y - h, width: len, height: h, rx: len * 0.05,
+    fill: o.fill || 'var(--overprint)', stroke: ink, 'stroke-width': 5 }, g);
+  /* windscreen and the long window band */
+  el('rect', { x: x + len * 0.04, y: y - h * 0.86, width: len * 0.14, height: h * 0.44,
+    fill: 'var(--paper_hi)', stroke: ink, 'stroke-width': 3 }, g);
+  el('rect', { x: x + len * 0.21, y: y - h * 0.86, width: len * 0.72, height: h * 0.40,
+    fill: 'var(--paper_hi)', stroke: ink, 'stroke-width': 3 }, g);
+  /* window mullions */
+  for (let i = 1; i < 7; i++) {
+    const wx = x + len * 0.21 + (len * 0.72 / 7) * i;
+    el('path', { d: 'M' + wx + ' ' + (y - h * 0.86) + ' L' + wx + ' ' + (y - h * 0.46),
+      stroke: ink, 'stroke-width': 2 }, g);
+  }
+  /* livery stripe and a door */
+  el('rect', { x: x, y: y - h * 0.34, width: len, height: h * 0.10, fill: 'var(--accent)' }, g);
+  el('rect', { x: x + len * 0.50, y: y - h * 0.90, width: len * 0.10, height: h * 0.58,
+    fill: 'var(--ink)', opacity: 0.8 }, g);
+  /* wheels */
+  [0.20, 0.78].forEach(function (k) {
+    el('circle', { cx: x + len * k, cy: y, r: h * 0.19, fill: 'var(--ink)' }, g);
+    el('circle', { cx: x + len * k, cy: y, r: h * 0.08, fill: 'var(--paper_hi)' }, g);
+  });
+}
+
+/* a tree: trunk plus two foliage discs, drawn in the plate's own palette */
+function tree(g, x, y, h, opts) {
+  const o = opts || {};
+  const ink = 'var(--ink)';
+  el('path', { d: 'M' + (x - h * 0.055) + ' ' + y + ' L' + (x - h * 0.04) + ' ' + (y - h * 0.55) +
+    ' L' + (x + h * 0.04) + ' ' + (y - h * 0.55) + ' L' + (x + h * 0.055) + ' ' + y + ' Z',
+    fill: o.trunk || 'var(--ink)', stroke: ink, 'stroke-width': 2.5 }, g);
+  [[0, -0.72, 0.30], [-0.19, -0.60, 0.22], [0.20, -0.62, 0.24]].forEach(function (c) {
+    el('circle', { cx: x + h * c[0], cy: y + h * (c[1] - 0.05), r: h * c[2],
+      fill: o.fill || 'var(--secondary)', stroke: ink, 'stroke-width': 3 }, g);
+  });
+}
+
+/* a block: body, roof line, and a grid of lit windows */
+function building(g, x, y, w, h, opts) {
+  const o = opts || {};
+  const ink = 'var(--ink)';
+  el('rect', { x: x, y: y - h, width: w, height: h,
+    fill: o.fill || 'var(--paper_hi)', stroke: ink, 'stroke-width': 5 }, g);
+  el('rect', { x: x - w * 0.04, y: y - h - w * 0.06, width: w * 1.08, height: w * 0.07,
+    fill: ink }, g);
+  windows(g, x, y, w, h, o);
+  return g;
+}
+
+/* the window grid: some lit, some dark, chosen by a seeded draw */
+function windows(g, x, y, w, h, opts) {
+  const o = opts || {};
+  const r = rng((o.seed || 3) * 31337 + Math.round(w));
+  const cols = Math.max(2, Math.floor(w / 34));
+  const rows = Math.max(2, Math.floor(h / 40));
+  const cw = w / cols, ch = h / rows;
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      const lit = r() > 0.42;
+      el('rect', {
+        x: x + cx * cw + cw * 0.22, y: y - h + cy * ch + ch * 0.20,
+        width: cw * 0.56, height: ch * 0.52,
+        fill: lit ? 'var(--secondary)' : 'var(--overprint)', opacity: lit ? 0.95 : 0.30
+      }, g);
     }
-    g.appendChild(el('path', { d: 'M380 150 L380 232', stroke: 'var(--accent)', 'stroke-width': 7 }));
-    g.appendChild(el('path', { d: 'M368 218 L380 236 L392 218', fill: 'var(--accent)' }));
-  },
-  /* 05 timeline: the area as a corridor over time */
+  }
+}
+
+const EXHIBIT_DRAWERS = [
+  /* 01 — the halte: a shelter, a bus at the kerb, people waiting, a street tree */
   function (g) {
-    g.appendChild(el('path', { d: 'M70 320 L740 320', stroke: 'var(--ink)', 'stroke-width': 8 }));
-    [[130, '1930'], [330, '1990'], [540, '2019'], [700, 'NOW']].forEach(function (p) {
-      g.appendChild(el('circle', { cx: p[0], cy: 320, r: 18, fill: 'var(--accent)' }));
-      g.appendChild(el('text', { x: p[0], y: 380, 'text-anchor': 'middle', fill: 'var(--ink)',
-        'font-family': 'Courier New,monospace', 'font-weight': 800, 'font-size': 30, textContent: p[1] }));
+    /* pavement */
+    el('rect', { x: 40, y: 470, width: 780, height: 12, fill: 'var(--ink)' }, g);
+    /* the shelter: roof on two posts, a bench inside */
+    el('path', { d: 'M90 300 L470 300 L440 258 L120 258 Z', fill: 'var(--accent)', stroke: 'var(--ink)', 'stroke-width': 5 }, g);
+    el('rect', { x: 118, y: 300, width: 9, height: 170, fill: 'var(--ink)' }, g);
+    el('rect', { x: 432, y: 300, width: 9, height: 170, fill: 'var(--ink)' }, g);
+    el('rect', { x: 150, y: 396, width: 250, height: 12, fill: 'var(--ink)' }, g);
+    el('rect', { x: 120, y: 330, width: 60, height: 46, fill: 'var(--paper_hi)', stroke: 'var(--ink)', 'stroke-width': 3 }, g);
+    /* people under the shelter and at the kerb, at mixed heights */
+    crowd(g, 168, 470, 4, { seed: 11, gap: 46, h: 92 });
+    crowd(g, 510, 470, 2, { seed: 23, gap: 40, h: 100 });
+    /* the bus pulling in */
+    bus(g, 520, 470, 300, {});
+    tree(g, 762, 470, 150, { seed: 5 });
+    windows(g, 90, 300, 340, 44, { seed: 5 });
+    /* the route line runs behind everything, with the stop marked */
+    el('path', { d: 'M60 214 L800 214', stroke: 'var(--overprint)', 'stroke-width': 4, 'stroke-dasharray': '16 12' }, g);
+    el('circle', { cx: 280, cy: 214, r: 13, fill: 'var(--accent)', stroke: 'var(--ink)', 'stroke-width': 3 }, g);
+  },
+
+  /* 02 — the name: an archival document, the letterhead building it came from */
+  function (g) {
+    /* the file card */
+    el('rect', { x: 120, y: 90, width: 620, height: 400, fill: 'var(--paper_hi)',
+      stroke: 'var(--ink)', 'stroke-width': 5 }, g);
+    el('rect', { x: 120, y: 90, width: 620, height: 54, fill: 'var(--overprint)' }, g);
+    /* ruled lines of a typed citation */
+    for (let i = 0; i < 7; i++) {
+      el('rect', { x: 158, y: 180 + i * 34, width: 300 + (i % 3) * 90, height: 7,
+        fill: 'var(--ink)', opacity: 0.34 }, g);
+    }
+    /* the building the name came from, stamped over the card's corner */
+    building(g, 452, 480, 220, 210, { seed: 7, fill: 'var(--paper_hi)' });
+    crowd(g, 300, 480, 3, { seed: 31, gap: 44, h: 78 });
+    tree(g, 200, 480, 120, { seed: 9 });
+    windows(g, 470, 480, 200, 200, { seed: 12 });
+    el('rect', { x: 90, y: 478, width: 700, height: 10, fill: 'var(--ink)' }, g);
+  },
+
+  /* 03 — five floors: a cutaway stack with people on each deck */
+  function (g) {
+    const floors = 5;
+    const base = 500;
+    const fh = 74;
+    const left = 170, right = 690;
+    for (let i = 0; i < floors; i++) {
+      const y = base - i * fh;
+      const lit = i === 1;
+      el('rect', { x: left, y: y - fh, width: right - left, height: fh,
+        fill: lit ? 'var(--accent)' : 'var(--paper_hi)', stroke: 'var(--ink)', 'stroke-width': 4 }, g);
+      /* the deck slab */
+      el('rect', { x: left - 16, y: y - 8, width: right - left + 32, height: 9, fill: 'var(--ink)' }, g);
+      /* people standing on the deck above, smaller with height */
+      const count = 5 - Math.floor(i / 2);
+      for (let k = 0; k < count; k++) {
+        const px = left + 48 + k * ((right - left - 96) / Math.max(1, count - 1));
+        figure(g, px, y - fh + 52, 46, { seed: (i + 1) * 17 + k, arm: (k % 2 ? 5 : -5) });
+      }
+      /* floor number */
+      el('text', { x: left - 40, y: y - fh * 0.28, 'text-anchor': 'end', fill: 'var(--ink)',
+        'font-family': 'Courier New,monospace', 'font-weight': 800, 'font-size': 32, textContent: String(i + 1) }, g);
+    }
+    /* the bus bay at street level */
+    bus(g, 200, base, 300, { fill: 'var(--overprint)' });
+    el('rect', { x: 120, y: base, width: 640, height: 10, fill: 'var(--ink)' }, g);
+  },
+
+  /* 04 — the loop: a section through the building, the walkway ringing it */
+  function (g) {
+    /* shell */
+    el('path', { d: 'M160 500 L160 150 L700 150 L700 500', fill: 'none', stroke: 'var(--ink)', 'stroke-width': 8 }, g);
+    /* the walkway on level two, drawn as a broad band */
+    el('path', { d: 'M160 380 L700 380', stroke: 'var(--overprint)', 'stroke-width': 26 }, g);
+    el('path', { d: 'M160 380 L700 380', stroke: 'var(--ink)', 'stroke-width': 3, 'stroke-dasharray': '14 10' }, g);
+    /* people walking the loop, all facing the same way round */
+    crowd(g, 220, 380, 6, { seed: 41, gap: 72, h: 66 });
+    /* the arrows that say it is a loop, not a line */
+    [[300, 400], [560, 400], [430, 352]].forEach(function (p, i) {
+      const dir = i === 2 ? 'M-14 0 L14 0' : 'M14 0 L-14 0';
+      el('path', { d: dir, stroke: 'var(--accent)', 'stroke-width': 7, 'stroke-linecap': 'round',
+        transform: 'translate(' + p[0] + ' ' + p[1] + ')' }, g);
     });
+    /* the halte at the top deck */
+    el('rect', { x: 300, y: 150, width: 260, height: 44, fill: 'var(--secondary)', stroke: 'var(--ink)', 'stroke-width': 4 }, g);
+    crowd(g, 350, 194, 2, { seed: 53, gap: 54, h: 52 });
+    /* the outer wall, glazed */
+    windows(g, 176, 340, 508, 150, { seed: 44 });
+    /* ground */
+    el('rect', { x: 120, y: 498, width: 620, height: 11, fill: 'var(--ink)' }, g);
+  },
+
+  /* 05 — the corridor over time: a street that changes, three eras */
+  function (g) {
+    /* the street runs back in perspective: four bands of buildings */
+    const rows = [{ y: 420, w: 120, h: 110 }, { y: 356, w: 96, h: 84 }, { y: 306, w: 72, h: 60 }];
+    rows.forEach(function (row, ri) {
+      let x = 70 + ri * 26;
+      let n = 0;
+      while (x < 800) {
+        building(g, x, row.y, row.w, row.h, { seed: 60 + ri * 10 + n, fill: ri === 1 ? 'var(--paper_hi)' : 'var(--paper_hi)' });
+        x += row.w + 18;
+        n++;
+      }
+    });
+    /* the road, narrowing to a vanishing point */
+    el('path', { d: 'M60 500 L800 500 L560 420 L300 420 Z', fill: 'var(--overprint)', opacity: 0.35 }, g);
+    el('path', { d: 'M60 500 L800 500', stroke: 'var(--ink)', 'stroke-width': 6 }, g);
+    /* a bus up the street and people on the pavement */
+    bus(g, 380, 424, 150, { fill: 'var(--accent)' });
+    crowd(g, 120, 500, 3, { seed: 71, gap: 40, h: 86 });
+    crowd(g, 640, 500, 2, { seed: 83, gap: 38, h: 74 });
+    tree(g, 740, 500, 140, { seed: 13 });
+    tree(g, 62, 500, 120, { seed: 19 });
   }
 ];
 
@@ -343,24 +544,29 @@ function currentBeat(t) {
 /* ---- per-glyph headline: each glyph drops, squashes and rebounds ---------- */
 const glyphs = [];
 function buildHeadline(text) {
-  h1El.textContent = '';
-  h1Sh.textContent = '';
+  /* One span per glyph, but the glyphs are grouped per word.
+     A bare glyph is inline-block, so the line breaker may split a word at any
+     character: "CUMA" came out as CU / MA. Wrapping each word in its own
+     inline-block makes the word the smallest unit that can move to the next
+     line, and word-spacing carries the gap that the removed spaces leave. */
+  while (h1El.firstChild) h1El.removeChild(h1El.firstChild);
   glyphs.length = 0;
-  const split = function (target, offsetAttr) {
-    const chars = Array.from(text);
-    chars.forEach(function (ch, i) {
+
+  text.split(/\s+/).forEach(function (word) {
+    if (!word) return;
+    const w = document.createElement('span');
+    w.style.display = 'inline-block';
+    w.style.whiteSpace = 'nowrap';
+    Array.from(word).forEach(function (ch) {
       const s = document.createElement('span');
-      s.textContent = ch === ' ' ? '\u00a0' : ch;
+      s.textContent = ch;
       s.style.display = 'inline-block';
       s.style.willChange = 'transform,opacity';
-      target.appendChild(s);
-      if (offsetAttr) s.dataset[offsetAttr] = String(i);
+      w.appendChild(s);
+      glyphs.push(s);
     });
-    return Array.from(target.children);
-  };
-  const fg = split(h1El, null);
-  const sh = split(h1Sh, 'i');
-  fg.forEach(function (s, i) { glyphs.push({ fg: s, sh: sh[i] }); });
+    h1El.appendChild(w);
+  });
 }
 
 /* ---- grain: dust and ink specks, reseeded every two frames --------------- */
@@ -427,17 +633,17 @@ window.__umpRender = function (t) {
   glyphs.forEach(function (g, i) {
     const dt = i * 0.045;
     const q = seg(t, cur.t0 + 0.10 + dt, cur.t0 + 0.10 + dt + 0.34);
-    if (q <= 0) { setO(g.fg, 0); setO(g.sh, 0); return; }
+    if (q <= 0) {
+      g.style.visibility = 'hidden';
+      setO(g, 0);
+      return;
+    }
+    g.style.visibility = 'visible';
     const drop = lerp(-70, 0, E.back(q));
     const sq = 1 + 0.16 * (1 - q) * Math.cos(q * Math.PI);
-    setT(g.fg, 0, drop, 1 / sq, 0, sq);
-    setT(g.sh, 8, drop + 8, 1 / sq, 0, sq);
-    /* idle life: the finished headline sways a hair, never freezing */
-    const idle = Math.sin(t * 1.7 + i * 0.35) * 0.6;
-    if (q >= 1) setT(g.fg, 0, idle, 1, 0, 1);
-    if (q >= 1) setT(g.sh, 8, idle + 8, 1, 0, 1);
-    setO(g.fg, clamp(q * 2.2));
-    setO(g.sh, clamp(q * 2.2));
+    const idle = q >= 1 ? Math.sin(t * 1.7 + i * 0.35) * 0.6 : 0;
+    setT(g, 0, q >= 1 ? idle : drop, q >= 1 ? 1 : 1 / sq, 0, q >= 1 ? 1 : sq);
+    setO(g, clamp(q * 2.2));
   });
 
   /* ---- caption pill: pops after the headline, then breathes ------------- */
