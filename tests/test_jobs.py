@@ -23,10 +23,9 @@ class JobStoreTests(unittest.TestCase):
             ("approve", "brief_draft", "brief_approved"),
             ("research", "brief_approved", "research_draft"),
             ("approve", "research_draft", "research_approved"),
-            ("write_naskah", "research_approved", "naskah_draft"),
+            ("select_style", "research_approved", "style_approved"),
+            ("write_naskah", "style_approved", "naskah_draft"),
             ("approve", "naskah_draft", "naskah_approved"),
-            ("select_style", "naskah_approved", "style_approved"),
-            ("approve", "style_approved", "style_frame"),
         ]
         for action, expect, target in chain:
             if self.store.stage_of(job_id) == stage:
@@ -35,25 +34,66 @@ class JobStoreTests(unittest.TestCase):
                 self.store.advance(job_id, self.store.get(job_id)["rev"], action, expect=expect, to=target)
         self.assertEqual(self.store.stage_of(job_id), stage)
 
+    def _render_style_frame(self, job_id):
+        rev = self.store.get(job_id)["rev"]
+        run = self.store.claim(job_id, rev, "style_frame")
+        output = self.root / "runs" / run["run_id"] / "style-frame.png"
+        output.write_bytes(b"frame")
+        return self.store.finish(run["run_id"], "style-frame.png", None)
+
+    def test_naskah_revision_rolls_back_stage(self):
+        job = self.store.create("revision rollback")
+        self.store.advance(job["job_id"], 1, "set_brief", expect="intake", to="naskah_approved")
+        revised = self.store.revise(job["job_id"], 1, {"naskah": {"beats": []}})
+        self.assertEqual(revised["rev"], 2)
+        self.assertEqual(revised["stage"], "naskah_draft")
+
+    def test_approval_requires_expected_source_stage(self):
+        job = self.store.create("approval source")
+        self.store.advance(job["job_id"], 1, "set_brief", expect="intake", to="intake")
+        artifact = self._artifact(job["job_id"], 1, "naskah", "naskah.json")
+        with self.assertRaisesRegex(DomainError, "APPROVAL_STAGE"):
+            self.store.approve(job["job_id"], 1, "naskah", artifact["id"])
+
+    def test_preview_requires_style_frame_approval_and_final_ready(self):
+        job = self.store.create("approval sequence")
+        self._advance_to(job["job_id"], "naskah_approved")
+        self._render_style_frame(job["job_id"])
+        rev = self.store.get(job["job_id"])["rev"]
+        with self.assertRaisesRegex(DomainError, "APPROVAL_REQUIRED"):
+            self.store.claim(job["job_id"], rev, "preview")
+        style = self._artifact(job["job_id"], rev, "style_frame", "style.png")
+        self.store.approve(job["job_id"], rev, "script_style", style["id"])
+        preview_run = self.store.claim(job["job_id"], rev, "preview")
+        (self.root / "runs" / preview_run["run_id"] / "preview.mp4").write_bytes(b"preview")
+        preview_artifact = self.store.finish(preview_run["run_id"], "preview.mp4", None)["artifact"]
+        self.store.approve(job["job_id"], rev, "preview", preview_artifact["id"])
+        self.assertEqual(self.store.stage_of(job["job_id"]), "final_ready")
+        self.store.claim(job["job_id"], rev, "final")
+
     def test_revision_requires_new_approval(self):
         job = self.store.create("Explain the five o'clock coffee ritual")
         job_id = job["job_id"]
-        self._advance_to(job_id, "style_frame")
+        self._advance_to(job_id, "naskah_approved")
+        self._render_style_frame(job_id)
         rev = self.store.get(job_id)["rev"]
         with self.assertRaisesRegex(DomainError, "APPROVAL_REQUIRED"):
             self.store.claim(job_id, rev, "preview")
 
         style = self._artifact(job_id, rev, "style_frame", "style.png")
         self.store.approve(job_id, rev, "script_style", style["id"])
-        preview = self._artifact(job_id, rev, "preview", "preview.mp4")
+        preview_run = self.store.claim(job_id, rev, "preview")
+        (self.root / "runs" / preview_run["run_id"] / "preview.mp4").write_bytes(b"preview")
+        preview = self.store.finish(preview_run["run_id"], "preview.mp4", None)["artifact"]
         self.store.approve(job_id, rev, "preview", preview["id"])
+        self.assertEqual(self.store.stage_of(job_id), "final_ready")
         run = self.store.claim(job_id, rev, "final")
         self.store.finish(run["run_id"], None, "renderer failed")
 
         revised = self.store.revise(job_id, rev, {"cues": {"c007": {"t_ms": 9200}}})
         self.assertEqual(revised["rev"], rev + 1)
         self.assertEqual(self.store.get(job_id)["rev"], rev + 1)
-        with self.assertRaisesRegex(DomainError, "APPROVAL_REQUIRED"):
+        with self.assertRaisesRegex(DomainError, "STAGE_ORDER"):
             self.store.claim(job_id, rev + 1, "final")
         self.assertEqual(self.store.get(job_id)["artifacts"][0]["rev"], rev)
 
@@ -102,7 +142,7 @@ class JobStoreTests(unittest.TestCase):
 
     def test_concurrent_claims_have_one_winner(self):
         job = self.store.create("race")
-        self._advance_to(job["job_id"], "style_approved")
+        self._advance_to(job["job_id"], "naskah_approved")
         rev = self.store.get(job["job_id"])["rev"]
 
         def claim():
@@ -117,7 +157,7 @@ class JobStoreTests(unittest.TestCase):
 
     def test_finish_only_accepts_run_workspace_files(self):
         job = self.store.create("finish")
-        self._advance_to(job["job_id"], "style_approved")
+        self._advance_to(job["job_id"], "naskah_approved")
         run = self.store.claim(job["job_id"], self.store.get(job["job_id"])["rev"], "style_frame")
         run_dir = self.root / "runs" / run["run_id"]
         output = run_dir / "frame.png"
@@ -130,7 +170,7 @@ class JobStoreTests(unittest.TestCase):
 
     def test_failed_run_does_not_publish_partial_file(self):
         job = self.store.create("partial")["job_id"]
-        self._advance_to(job, "style_approved")
+        self._advance_to(job, "naskah_approved")
         run = self.store.claim(job, self.store.get(job)["rev"], "style_frame")["run_id"]
         (self.root / "runs" / run / "partial.png").write_bytes(b"partial")
         self.assertEqual(self.store.finish(run, "partial.png", "failed")["status"], "failed")
@@ -138,7 +178,7 @@ class JobStoreTests(unittest.TestCase):
 
     def test_old_run_does_not_overwrite_current_status(self):
         job = self.store.create("old")["job_id"]
-        self._advance_to(job, "style_approved")
+        self._advance_to(job, "naskah_approved")
         run = self.store.claim(job, self.store.get(job)["rev"], "style_frame")["run_id"]
         self.store.revise(job, 1, {"title": "new"})
         self.store.finish(run, None, "old error")
@@ -147,7 +187,8 @@ class JobStoreTests(unittest.TestCase):
 
     def test_approval_requires_existing_artifact(self):
         job = self.store.create("approval")["job_id"]
-        self._advance_to(job, "style_frame")
+        self._advance_to(job, "naskah_approved")
+        self._render_style_frame(job)
         rev = self.store.get(job)["rev"]
         style = self._artifact(job, rev, "style_frame", "style.png")
         self.store.approve(job, rev, "script_style", style["id"])
@@ -157,7 +198,7 @@ class JobStoreTests(unittest.TestCase):
 
     def test_missing_snapshot_is_rejected(self):
         job = self.store.create("snapshot")["job_id"]
-        self._advance_to(job, "style_approved")
+        self._advance_to(job, "naskah_approved")
         rev = self.store.get(job)["rev"]
         run = self.store.claim(job, rev, "style_frame")
         (self.root / run["snapshot_path"]).unlink()

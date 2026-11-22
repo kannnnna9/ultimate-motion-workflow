@@ -41,9 +41,17 @@ TARGET_STAGE = {
     "research": "research_draft",
     "naskah": "naskah_draft",
     "style_decision": "research_approved",
-    "style_frame": "style_approved",
+    "style_frame": "naskah_approved",
     "preview": "style_frame",
-    "final": "preview",
+    "final": "final_ready",
+}
+
+APPROVAL_PREVIOUS_STAGE = {
+    "brief": "brief_draft",
+    "research": "research_draft",
+    "naskah": "naskah_draft",
+    "script_style": "style_frame",
+    "preview": "preview",
 }
 
 # Approving a stage produces the artifact kinds listed here.
@@ -63,14 +71,16 @@ STAGE_NEXT = {
     "naskah": "naskah_approved",
     "style": "style_approved",
     "script_style": "style_frame",
-    "preview": "preview",
+    "preview": "final_ready",
 }
 
 # A document revision invalidates every approval at or after that stage.
 DOC_REVISION_ROLLBACK = {
     "naskah": "naskah_draft",
-    # The script was written to fit the chosen style, so changing the style
-    # invalidates the script as well as the style approval.
+    "cue": "naskah_draft",
+    "cues": "naskah_draft",
+    "voice_asset": "naskah_approved",
+    "voice_words": "naskah_approved",
     "style_id": "style_approved",
     "brief": "brief_draft",
     "sources": "research_draft",
@@ -216,11 +226,17 @@ class JobStore:
             except (TypeError, ValueError) as exc:
                 raise DomainError("INVALID_PAYLOAD", "revision must be JSON") from exc
             new_rev = rev + 1
+            rollback = None
+            for field, target in DOC_REVISION_ROLLBACK.items():
+                if field in patch and payload.get(field) != json.loads(row["payload"]).get(field):
+                    rollback = target if rollback is None else min(rollback, target, key=stage_index)
             rev_dir = self._job_dir(job_id) / "revisions" / str(new_rev)
             rev_dir.mkdir(parents=True)
             (rev_dir / "input.json").write_text(encoded, encoding="utf-8")
             db.execute("INSERT INTO revisions VALUES (?,?,?)", (job_id, new_rev, json.dumps(payload)))
-            db.execute("UPDATE jobs SET rev=?, payload=?, status='draft', error=NULL WHERE job_id=?", (new_rev, json.dumps(payload), job_id))
+            if rollback is None:
+                rollback = row["stage"]
+            db.execute("UPDATE jobs SET rev=?, payload=?, stage=?, status='draft', error=NULL WHERE job_id=?", (new_rev, json.dumps(payload), rollback, job_id))
             db.commit()
         return self.get(job_id)
 
@@ -270,8 +286,15 @@ class JobStore:
             expected = STAGE_KIND.get(stage)
             if not expected or art["kind"] != expected:
                 raise DomainError("INVALID_APPROVAL", stage)
+            required = APPROVAL_PREVIOUS_STAGE.get(stage)
+            if required is None or row["stage"] != required:
+                raise DomainError("APPROVAL_STAGE", f"{stage} requires {required} (at {row['stage']})")
             db.execute("INSERT OR REPLACE INTO approvals VALUES (?,?,?,?)", (job_id, rev, stage, artifact_id))
-        self._advance_after_approval(job_id, rev, stage)
+            target = STAGE_NEXT.get(stage)
+            if target is not None:
+                seq = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM stage_history WHERE job_id=?", (job_id,)).fetchone()[0]
+                db.execute("INSERT INTO stage_history VALUES (?,?,?,?,?,?,?)", (job_id, rev, seq, f"approve_{stage}", row["stage"], target, None))
+                db.execute("UPDATE jobs SET stage=? WHERE job_id=?", (target, job_id))
         return {"job_id": job_id, "rev": rev, "stage": stage, "artifact_id": artifact_id,
                 "job_stage": self.stage_of(job_id)}
 
@@ -306,7 +329,7 @@ class JobStore:
             required = TARGET_STAGE[target]
             if row["stage"] != required:
                 raise DomainError("STAGE_ORDER", f"{target} requires stage {required} (at {row['stage']})")
-            stage_for_target = {"preview": "preview", "final": "preview"}.get(target)
+            stage_for_target = {"preview": "script_style", "final": "preview"}.get(target)
             if stage_for_target and not self._approved(db, job_id, rev, stage_for_target):
                 raise DomainError("APPROVAL_REQUIRED", stage_for_target)
             active = db.execute("SELECT 1 FROM runs WHERE job_id=? AND status='running'", (job_id,)).fetchone()
@@ -386,6 +409,11 @@ class JobStore:
                 artifact_row = {"id": artifact_id, "job_id": run["job_id"], "rev": run["rev"], "kind": run["target"], "path": rel}
                 db.execute("UPDATE runs SET artifact_id=? WHERE run_id=?", (artifact_id, run_id))
             db.execute("UPDATE runs SET status=?, error=? WHERE run_id=?", (status, error, run_id))
+            if status == "finished":
+                next_stage = {"style_frame": "style_frame", "preview": "preview", "final": "final_ready"}.get(run["target"])
+                if next_stage:
+                    db.execute("UPDATE jobs SET stage=? WHERE job_id=? AND rev=? AND stage=?",
+                               (next_stage, run["job_id"], run["rev"], TARGET_STAGE[run["target"]]))
             db.execute("UPDATE jobs SET status=?, error=? WHERE job_id=? AND rev=?",
                        (status, error, run["job_id"], run["rev"]))
             db.commit()
