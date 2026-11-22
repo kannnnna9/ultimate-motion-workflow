@@ -2,6 +2,16 @@
 
 Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) dan [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-11-22
+
+### Changed
+- `ump_core/worker.py` memisahkan `CODE_ROOT` (kode) dari `DATA_ROOT` (data). Fixture kini tinggal di `~/.hermes/ump/fixtures/`, bukan di dalam pohon kode plugin, sehingga reinstall tidak lagi menimpa fixture yang dikoreksi operator.
+- Fixture disemai sekali saat plugin didaftarkan lewat `seed_fixtures()`; direktori yang sudah ada tidak pernah ditimpa.
+
+### Added
+- `$UMP_DATA_ROOT` untuk menempatkan data di lokasi lain.
+- `docs/MAINTENANCE.md` — dua salinan, pemisahan kode/data, prosedur rilis, aturan versi, dan cara menangkap bug yang lolos test.
+
 ## [1.2.0] - 2026-11-22
 
 ### Added
