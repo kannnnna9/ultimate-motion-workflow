@@ -1,0 +1,30 @@
+{
+  "id": "webgl-3d-stage",
+  "version": 1,
+  "entry": "ump.html",
+  "assets": ["assets/gsap.min.js"],
+  "palette": {
+    "ground": "#070B14",
+    "ink": "#F6F1E7",
+    "accent": "#FF7A2F",
+    "secondary": "#F5B73B",
+    "cola": "#3A1508"
+  },
+  "typography": {
+    "display": "DejaVu Sans",
+    "body": "DejaVu Sans Mono",
+    "weight": 800
+  },
+  "layout": {
+    "kind": "webgl-3d-stage",
+    "safe_area": { "x": 110, "y": 240, "width": 860, "height": 1060 }
+  },
+  "motion": {
+    "camera": "orbit-dolly-3d",
+    "fps": 30,
+    "primary": { "ease": "power3.out", "offset_ms": 0 },
+    "secondary": { "stagger_ms": 110 }
+  },
+  "caption_safe_area": { "x": 110, "y": 1420, "width": 860, "height": 280 },
+  "sources": [{ "name": "UMP WebGL 3D Spike", "url": "docs/ultra/specs/2026-11-22-ump-pipeline-repair-design.md" }]
+}

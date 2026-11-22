@@ -104,8 +104,12 @@ def inbound(event, gateway, **_):
         # Assistant output never lands here, so the model cannot approve itself.
         if text.strip() and not event.media_urls:
             _EVENTS["__operator_text__"] = text
+        # The command form is decided here, where the real event is in hand.
+        # Tool calls may run in another process that never saw this update, so
+        # the map alone cannot be the evidence: the message itself is.
+        _remember_command(key, text, now)
 
-        for stale in [k for k, v in _EVENTS.items() if now - v[0] > 600]:
+        for stale in [k for k, v in _EVENTS.items() if isinstance(v, tuple) and now - v[0] > 600]:
             del _EVENTS[stale]
         if len(_EVENTS) < 512:
             _EVENTS.setdefault(key, (now, text, event.media_urls[0] if voice else None))
@@ -130,6 +134,12 @@ def classify_approval(text, awaiting):
     raw = (text or "").strip()
     if not raw:
         return "unclear", None
+    # The documented command form carries the stage verbatim, so it is decided
+    # before prose rules: a scrub through the language model (question marks,
+    # hedges, the word "approve" on its own) must not downgrade an exact line.
+    command = _APPROVAL.fullmatch(" ".join(raw.split()))
+    if command:
+        return "approve", command.group(3)
     low = " ".join(raw.lower().split())
     # A question about approving is not an approval ("setujui?", "harus setuju gak sih").
     words = set(re.findall(r"[a-z]+", low))
@@ -146,11 +156,80 @@ def classify_approval(text, awaiting):
     if not approve:
         return "unclear", None
     named = {stage for stage, words in _STAGE_WORDS.items() if any(w in low for w in words)}
+    # "style frame" mentions both the style and the frame; the longer phrase is
+    # the one the operator meant, so a specific stage beats a substring match.
+    for stage, words in _STAGE_WORDS.items():
+        if any(' ' in w and w in low for w in words):
+            named = {stage} | {s for s in named if s != 'style' or stage != 'script_style'}
+            break
+    # `style_frame` and `frame-nya` are ordinary spellings of the frame stage.
+    if 'script_style' in named or re.search(r'\bstyle[_-]?frame\b|\bframe\b', low):
+        named = {s for s in named if s != 'style'} | {'script_style'}
     if len(named) > 1:
         # "setuju brief dan riset" commits to two things at once: ask, never guess.
         return "unclear", None
     stage = next(iter(named)) if named else awaiting
     return "approve", stage
+
+
+def _command_path():
+    """Where the gateway records explicit approval lines for later tool calls."""
+    return _home() / 'ump' / 'approvals.json'
+
+
+def _remember_command(key, text, now):
+    """Persist an explicit `UMP APPROVE …` line, bound to this exact message.
+
+    The store is keyed by (chat, user, message_id) and every entry records the
+    message it came from, so an approval is still traceable to the inbound
+    update even when the tool call runs in a different process.
+    """
+    match = _APPROVAL.fullmatch(' '.join((text or '').split()))
+    if not match:
+        return
+    path = _command_path()
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    try:
+        data = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError):
+        data = {}
+    stamp = f'{key[1]}:{key[2]}:{key[3]}'
+    data[stamp] = {'job': match.group(1), 'rev': int(match.group(2)),
+                   'stage': match.group(3), 'artifact': match.group(4), 'at': now}
+    data = {k: v for k, v in data.items() if now - v.get('at', 0) <= 600}
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data))
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+
+
+def _claimed_command(expected, job_id, rev):
+    """True once this message has authorised this exact artefact."""
+    path = _command_path()
+    if not path.exists():
+        return False
+    try:
+        key = _event_key()
+    except DomainError:
+        return False
+    stamp = f'{key[1]}:{key[2]}:{key[3]}'
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    entry = data.get(stamp)
+    if not entry or time.monotonic() - entry.get('at', 0) > 600:
+        return False
+    if entry.get('stage') != expected or entry.get('job') != job_id:
+        return False
+    if rev is not None and entry.get('rev') != rev:
+        return False
+    del data[stamp]
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data))
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+    return True
 
 
 def _turn_operator_text():
@@ -178,6 +257,8 @@ def _authorization(expected, job_id=None, rev=None, code="EXPLICIT_APPROVAL_REQU
             if entry is not None and entry[1] == expected and time.monotonic() - entry[0] <= 600:
                 _EVENTS[key] = (entry[0], '', None)
                 return entry[2] if entry[2] is not None else "ok"
+    if _claimed_command(expected, job_id, rev):
+        return "ok"
     # 2. a clear sentence of approval from the operator's inbound message
     text = _turn_operator_text()
     if job_id is not None:

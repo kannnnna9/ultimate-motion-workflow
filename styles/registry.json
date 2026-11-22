@@ -178,6 +178,50 @@
       "reference": "styles/isometric/STYLE.md",
       "composition": "styles/isometric/ump.html",
       "preview": "styles/isometric/preview.png"
+    },
+    {
+      "id": "webgl-3d-stage",
+      "name": "WebGL 3D Stage",
+      "status": "ready",
+      "summary": "Panggung 3D WebGL deterministik: objek volumetrik ber-lighting, orbit kamera sinematik, partikel karbonasi. Untuk demo produk, sains, dan cerita proses.",
+      "palette": {
+        "ground": "#070B14",
+        "ink": "#F6F1E7",
+        "accent": "#FF7A2F",
+        "secondary": "#F5B73B",
+        "cola": "#3A1508"
+      },
+      "typography": {
+        "display": "DejaVu Sans",
+        "body": "DejaVu Sans Mono",
+        "weight": 800
+      },
+      "layout": {
+        "kind": "webgl-3d-stage",
+        "safe_area": {
+          "x": 110,
+          "y": 240,
+          "width": 860,
+          "height": 1060
+        }
+      },
+      "motion": {
+        "camera": "orbit-dolly-3d",
+        "fps": 30,
+        "primary": {
+          "ease": "power3.out",
+          "offset_ms": 0
+        },
+        "secondary": {
+          "stagger_ms": 110
+        }
+      },
+      "caption_safe_area": {
+        "x": 110,
+        "y": 1420,
+        "width": 860,
+        "height": 280
+      }
     }
   ]
 }

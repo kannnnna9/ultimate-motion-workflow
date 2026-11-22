@@ -1,5 +1,7 @@
+import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -162,6 +164,107 @@ class SentenceApprovalTests(unittest.TestCase):
             with self.assertRaises(DomainError) as caught:
                 tools._authorization("brief", job_id, rev)
         self.assertIn(caught.exception.code, ("APPROVAL_UNCLEAR", "EXPLICIT_APPROVAL_REQUIRED"))
+
+    def test_explicit_command_form_is_classified_as_approval(self):
+        """The documented `UMP APPROVE …` line must work even without the event map.
+
+        The event map is per-process: when the tool call runs in an interpreter
+        that never saw the inbound update, the exact command form still has to
+        be accepted. Regression: it fell through to prose classification, where
+        `style_frame` was not a known stage name and `APPROVE` alone was read as
+        an ambiguous sentence.
+        """
+        for stage in ("brief", "research", "naskah", "style", "script_style", "preview"):
+            with self.subTest(stage=stage):
+                text = f"UMP APPROVE jPqXBh_NicNHLJkh 6 {stage} wBPkfJYBn3wOCRHd"
+                verdict, found = tools.classify_approval(text, awaiting=stage)
+                self.assertEqual((verdict, found), ("approve", stage))
+
+    def test_explicit_command_for_another_stage_does_not_approve_the_awaiting_one(self):
+        text = "UMP APPROVE jPqXBh_NicNHLJkh 6 preview wBPkfJYBn3wOCRHd"
+        verdict, stage = tools.classify_approval(text, awaiting="script_style")
+        self.assertEqual((verdict, stage), ("approve", "preview"))
+
+    def test_frame_synonyms_map_to_the_script_style_stage(self):
+        for text in ("setuju style frame", "setuju style_frame", "setuju frame-nya"):
+            with self.subTest(text=text):
+                verdict, stage = tools.classify_approval(text, awaiting="script_style")
+                self.assertEqual((verdict, stage), ("approve", "script_style"))
+        # A bare "gas" approves whatever is awaiting, which here is the frame.
+        verdict, stage = tools.classify_approval("gas", awaiting="script_style")
+        self.assertEqual((verdict, stage), ("approve", "script_style"))
+
+    def test_explicit_command_survives_a_fresh_process(self):
+        """The line must still authorise when the tool call runs elsewhere.
+
+        Regression: the evidence lived only in the gateway process's dict, and
+        the entry stored the whole phrase while `_authorization` compared it to
+        a bare stage name, so the documented command form never authorised
+        anything.
+        """
+        job_id, rev = self._job_awaiting_brief()
+        artifact_id = "wBPkfJYBn3wOCRHd"
+        with mock.patch.object(tools, "_home", lambda: Path(self.tmp.name)), \
+                mock.patch.dict(os.environ, {"HERMES_SESSION_PLATFORM": "telegram",
+                                             "HERMES_SESSION_CHAT_TYPE": "dm",
+                                             "HERMES_SESSION_CHAT_ID": "42",
+                                             "HERMES_SESSION_USER_ID": "42",
+                                             "HERMES_SESSION_MESSAGE_ID": "9001"}):
+            tools._remember_command((tools._home(), "42", "42", "9001"),
+                                    f"UMP APPROVE {job_id} {rev} brief {artifact_id}", time.monotonic())
+            # setUp stubs the gateway away; this test is about the real lookup.
+            from gateway.session_context import get_session_env
+            with mock.patch.object(tools, "_EVENTS", {}), \
+                    mock.patch.object(tools, "_turn_operator_text", lambda: ""), \
+                    mock.patch.object(tools, "_event_key",
+                                      lambda: (tools._home(), "42", "42", "9001")):
+                self.assertEqual(tools._authorization("brief", job_id, rev), "ok")
+                # One message authorises one artefact, never a second time.
+                with self.assertRaises(DomainError):
+                    tools._authorization("brief", job_id, rev)
+
+    def test_command_for_another_stage_never_authorises(self):
+        job_id, rev = self._job_awaiting_brief()
+        artifact_id = "wBPkfJYBn3wOCRHd"
+        with mock.patch.object(tools, "_home", lambda: Path(self.tmp.name)), \
+                mock.patch.dict(os.environ, {"HERMES_SESSION_PLATFORM": "telegram",
+                                             "HERMES_SESSION_CHAT_TYPE": "dm",
+                                             "HERMES_SESSION_CHAT_ID": "42",
+                                             "HERMES_SESSION_USER_ID": "42",
+                                             "HERMES_SESSION_MESSAGE_ID": "9002"}):
+            tools._remember_command((tools._home(), "42", "42", "9002"),
+                                    f"UMP APPROVE {job_id} {rev} preview {artifact_id}", time.monotonic())
+            with mock.patch.object(tools, "_EVENTS", {}), \
+                    mock.patch.object(tools, "_turn_operator_text", lambda: ""):
+                with self.assertRaises(DomainError):
+                    tools._authorization("brief", job_id, rev)
+
+    def test_inbound_hook_records_operator_text_without_crashing(self):
+        """The hook mixes stamps and the turn text in one dict; it must survive both.
+
+        Regression: the prune loop did `now - v[0]` over every value, so the
+        first plain text message raised TypeError and no later approval could
+        ever be recorded.
+        """
+        from types import SimpleNamespace
+        from gateway.platforms.event import MessageType
+
+        artifact_id = "wBPkfJYBn3wOCRHd"
+
+        def event(mid, text):
+            return SimpleNamespace(
+                text=text, message_id=mid, message_type=MessageType.TEXT,
+                media_urls=[], media_types=[], raw_message=None,
+                source=SimpleNamespace(platform=SimpleNamespace(value="telegram"),
+                                       chat_type="dm", user_id="42", chat_id="42", is_bot=False))
+
+        gateway = SimpleNamespace(_is_user_authorized_for_source=lambda *a, **k: True)
+        with mock.patch.object(tools, "_home", lambda: Path(self.tmp.name)), \
+                mock.patch.object(tools, "_EVENTS", {}):
+            tools.inbound(event("1", "halo"), gateway)
+            tools.inbound(event("2", f"UMP APPROVE jPqXBh_NicNHLJkh 6 script_style {artifact_id}"), gateway)
+            recorded = json.loads(tools._command_path().read_text())
+        self.assertEqual(recorded["42:42:2"]["stage"], "script_style")
 
     def test_model_generated_text_cannot_approve_itself(self):
         """Only the operator's inbound message is evidence, never assistant text."""
