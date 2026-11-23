@@ -380,7 +380,9 @@ window.__SHOT_SPAN__ = null;
       put(capMesh, m, [0.95, 0.25, 0.12], [1.0, 0.82, 0.4], 1.0, 0.9);
     }
 
-    for (const o of (shot.props ? shot.props(p, t) : [])) put(o.mesh, o.m, o.col, o.rim, o.alpha, o.spec);
+    const props = shot.props ? shot.props(p, t) : [];
+    window.__SHOT_DEBUG__ = { idx, t, nProps: props.length, firstMesh: props[0] && Object.keys(props[0]).join(',') };
+    for (const o of props) put(o.mesh, o.m, o.col, o.rim, o.alpha, o.spec);
   };
 }
 
@@ -468,9 +470,17 @@ window.__player = {
 // looking like frame zero.
 window.__hf = {
   duration: totalDur,
-  seek(t) { window.__player.renderSeek(t); },
+  seek(t) {
+    window.__player.renderSeek(t);
+    // Block until the GPU has actually finished: the screenshot is taken
+    // immediately after this returns, and an unsynchronised readback captured
+    // the previous shot instead of the one we just asked for.
+    const px = new Uint8Array(4);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.finish();
+  },
 };
-window.__hfWaitForSeekCompletion = () => Promise.resolve();
+window.__hfWaitForSeekCompletion = () => new Promise(r => setTimeout(r, 0));
 window.__timelines = { root: tl };
 // Debug probe: project a world point through the current shot camera.
 window.__probePoint = (t, pt) => {
