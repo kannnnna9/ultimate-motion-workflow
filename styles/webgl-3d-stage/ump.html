@@ -452,6 +452,15 @@ window.__player = {
   get time() { return tl.time(); },
   get duration() { return tl.duration(); },
 };
+// HyperFrames requires this exact contract: it polls for window.__hf with a
+// numeric duration and a seek() before every capture. Without it the recorder
+// falls back to a path that never runs our render, and every frame comes out
+// looking like frame zero.
+window.__hf = {
+  duration: totalDur,
+  seek(t) { window.__player.renderSeek(t); },
+};
+window.__hfWaitForSeekCompletion = () => Promise.resolve();
 window.__timelines = { root: tl };
 // Debug probe: project a world point through the current shot camera.
 window.__probePoint = (t, pt) => {
