@@ -27,12 +27,13 @@ class WorkerTests(unittest.TestCase):
             ('select_style', 'research_approved', 'style_approved'),
             ('write_naskah', 'style_approved', 'naskah_draft'),
             ('approve', 'naskah_draft', 'naskah_approved'),
+            ('advance', 'naskah_approved', 'storyboard'),
         ]
         for action, expect, target in chain:
             if self.store.stage_of(self.job) == expect:
                 self.store.advance(self.job, self.store.get(self.job)['rev'], action,
                                    expect=expect, to=target)
-        self.assertEqual(self.store.stage_of(self.job), 'naskah_approved')
+        self.assertEqual(self.store.stage_of(self.job), 'storyboard')
         return self.store.get(self.job)['rev']
 
     def test_worker_failure(self):

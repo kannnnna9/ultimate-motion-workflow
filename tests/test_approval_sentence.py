@@ -28,6 +28,7 @@ class StageReorderTests(unittest.TestCase):
             "research_draft", "research_approved",
             "style_approved",
             "naskah_draft", "naskah_approved",
+            "storyboard",
             "style_frame", "preview", "final_ready",
         ))
 
@@ -100,11 +101,24 @@ class SentenceApprovalTests(unittest.TestCase):
             "kalau setuju berarti lanjut ya?",
             "napas",
             "berapa lama render",
-            "ganti warnanya jadi biru",
         ):
             with self.subTest(text=text):
                 verdict, _ = tools.classify_approval(text, awaiting="brief")
                 self.assertEqual(verdict, "unclear", f"{text!r} must not approve")
+
+    def test_revision_request_is_a_rejection_not_an_approval(self):
+        """Asking for a change is the opposite of approving what exists."""
+        for text in ("ganti warnanya jadi biru", "revisi dulu dong", "kurang pas", "perbaiki beat 3"):
+            with self.subTest(text=text):
+                verdict, _ = tools.classify_approval(text, awaiting="brief")
+                self.assertEqual(verdict, "reject", f"{text!r} must read as a change request")
+
+    def test_short_plain_approvals_are_accepted(self):
+        """The operator should not have to type identifiers or a command form."""
+        for text in ("setuju", "ya setuju", "oke lanjut", "gas", "sip", "mantap", "lanjutkan"):
+            with self.subTest(text=text):
+                verdict, stage = tools.classify_approval(text, awaiting="naskah")
+                self.assertEqual((verdict, stage), ("approve", "naskah"))
 
     def test_topic_mention_disambiguates(self):
         """'setuju' with an explicit topic commits that topic, not the awaiting one."""

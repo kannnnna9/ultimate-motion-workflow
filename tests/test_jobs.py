@@ -26,13 +26,24 @@ class JobStoreTests(unittest.TestCase):
             ("select_style", "research_approved", "style_approved"),
             ("write_naskah", "style_approved", "naskah_draft"),
             ("approve", "naskah_draft", "naskah_approved"),
+            ("advance", "naskah_approved", "storyboard"),
         ]
+        # naskah_approved is where the script is signed off; the pipeline then
+        # waits at `storyboard` for the reference image, and frames render from
+        # there. A test asking for naskah_approved therefore stops one step later.
+        stop_at = "storyboard" if stage == "naskah_approved" else stage
         for action, expect, target in chain:
-            if self.store.stage_of(job_id) == stage:
+            if self.store.stage_of(job_id) == stop_at:
                 return
             if self.store.stage_of(job_id) == expect:
                 self.store.advance(job_id, self.store.get(job_id)["rev"], action, expect=expect, to=target)
-        self.assertEqual(self.store.stage_of(job_id), stage)
+        self.assertEqual(self.store.stage_of(job_id), stop_at)
+
+    def _pass_storyboard(self, job_id):
+        """Cross the storyboard stage: the pipeline requires it before frames."""
+        if self.store.stage_of(job_id) == "naskah_approved":
+            self.store.advance(job_id, self.store.get(job_id)["rev"], "advance",
+                               expect="naskah_approved", to="storyboard")
 
     def _render_style_frame(self, job_id):
         rev = self.store.get(job_id)["rev"]

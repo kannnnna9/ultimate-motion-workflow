@@ -28,6 +28,7 @@ STAGES = (
     "style_approved",
     "naskah_draft",
     "naskah_approved",
+    "storyboard",
     "style_frame",
     "preview",
     "final_ready",
@@ -41,7 +42,8 @@ TARGET_STAGE = {
     "research": "research_draft",
     "naskah": "naskah_draft",
     "style_decision": "style_approved",
-    "style_frame": "naskah_approved",
+    "storyboard": "naskah_approved",
+    "style_frame": "storyboard",
     "preview": "style_frame",
     "final": "final_ready",
 }
@@ -50,6 +52,7 @@ APPROVAL_PREVIOUS_STAGE = {
     "brief": "brief_draft",
     "research": "research_draft",
     "naskah": "naskah_draft",
+    "storyboard": "storyboard",
     "script_style": "style_frame",
     "preview": "preview",
 }
@@ -60,6 +63,7 @@ STAGE_KIND = {
     "research": "research",
     "naskah": "naskah",
     "style": "style_decision",
+    "storyboard": "storyboard",
     "script_style": "style_frame",
     "preview": "preview",
 }
@@ -70,6 +74,7 @@ STAGE_NEXT = {
     "research": "research_approved",
     "naskah": "naskah_approved",
     "style": "style_approved",
+    "storyboard": "style_frame",
     "script_style": "style_frame",
     "preview": "final_ready",
 }
@@ -84,6 +89,9 @@ DOC_REVISION_ROLLBACK = {
     "style_id": "style_approved",
     "brief": "brief_draft",
     "sources": "research_draft",
+    # A new storyboard does not invalidate the script, but it does invalidate the
+    # frames and preview rendered from the previous one.
+    "storyboard": "storyboard",
 }
 
 
@@ -249,6 +257,22 @@ class JobStore:
             if rollback is None:
                 rollback = row["stage"]
             db.execute("UPDATE jobs SET rev=?, payload=?, stage=?, status='draft', error=NULL WHERE job_id=?", (new_rev, json.dumps(payload), rollback, job_id))
+            db.commit()
+        return self.get(job_id)
+
+    def set_stage(self, job_id, rev, stage, note=""):
+        """Move a job to an explicit stage after a side-effect the caller already
+        committed (e.g. attaching a storyboard image)."""
+        stage_index(stage)
+        with self._lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._job(db, job_id)
+            self._check_rev(row, rev)
+            seq = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM stage_history WHERE job_id=?",
+                             (job_id,)).fetchone()[0]
+            db.execute("INSERT INTO stage_history VALUES (?,?,?,?,?,?,?)",
+                       (job_id, rev, seq, "set_stage", row["stage"], stage, note))
+            db.execute("UPDATE jobs SET stage=? WHERE job_id=?", (stage, job_id))
             db.commit()
         return self.get(job_id)
 

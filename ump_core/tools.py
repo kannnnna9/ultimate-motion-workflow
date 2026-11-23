@@ -15,8 +15,8 @@ from .jobs import STAGE_KIND, DomainError, JobStore
 from .worker import FIXTURES, ID, MEDIA, ROOT, _valid_words, episode_docs, owned, reconcile, submit, execute_run
 
 _APPROVAL = re.compile(
-    r'UMP APPROVE ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8}) '
-    r'(brief|research|naskah|style|script_style|preview) ([A-Za-z0-9_-]{16})\Z')
+    r'(?:UMP\s+APPROVE\s+([A-Za-z0-9_-]{16})\s+([1-9][0-9]{0,8})\s+'
+    r'(brief|research|naskah|style|storyboard|script_style|preview)\s+([A-Za-z0-9_-]{16}))\Z')
 _AUDIO = re.compile(r'UMP VO ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8})\Z')
 # ---- sentence approval ---------------------------------------------------
 # The operator writes in Indonesian and should not have to type identifiers
@@ -27,18 +27,23 @@ _AUDIO = re.compile(r'UMP VO ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8})\Z')
 # "bisa dianggap setuju", "karena model bilang". Only a direct statement counts.
 _HEDGE_WORDS = ("anggap", "dianggap", "anggapnya", "kalau", "kalo", "seandainya",
                 "menurutku", "menurutmu", "kayaknya", "sepertinya", "mungkin",
-                "bisa dianggap", "anggap saja", "model bilang", "asumsi")
-_APPROVE_WORDS = ("setuju", "setujui", "approve", "acc", "oke setuju",
-                  "ok setuju", "sip setuju", "lanjut", "gas", "lanjutkan", "silakan lanjut",
-                  "boleh lanjut", "terima", "terima kasih lanjut")
+                "bisa dianggap", "anggap saja", "model bilang", "asumsi",
+                "nanti", "besok", "tunggu", "belum")
+_APPROVE_WORDS = ("setuju", "setujui", "approved", "approve", "acc", "oke setuju",
+                  "ok setuju", "sip", "sip setuju", "lanjut", "lanjutkan", "gas",
+                  "gaskeun", "silakan lanjut", "boleh lanjut", "terima", "mantap",
+                  "cocok", "pas", "bagus lanjut", "ya setuju", "iya setuju", "yoi",
+                  "boleh", "setuju banget", "fix", "okedeh", "oke deh", "oke lah", "okelah")
 _REJECT_WORDS = ("tolak", "jangan", "batal", "tidak setuju", "gak setuju", "ga setuju",
-                 "nggak setuju", "gak usah", "ga usah", "jangan lanjut", "belum setuju")
+                 "nggak setuju", "gak usah", "ga usah", "jangan lanjut", "belum setuju",
+                 "salah", "ganti", "ulang", "revisi", "perbaiki", "kurang")
 # Stage words the operator may name to disambiguate which artefact they mean.
 _STAGE_WORDS = {
     "brief": ("brief", "ringkasan", "ringkasan brief"),
     "research": ("riset", "research", "penelitian", "sumber"),
     "style": ("style", "gaya", "preset", "visual"),
     "naskah": ("naskah", "skrip", "script", "teks"),
+    "storyboard": ("storyboard", "story board", "papan cerita", "panel"),
     "script_style": ("style frame", "style_frame", "frame", "contoh frame"),
     "preview": ("preview", "pratinjau", "video"),
 }
@@ -51,6 +56,7 @@ _QUESTION_WORDS = ("apa", "apakah", "kenapa", "mengapa", "gimana", "bagaimana",
 _EVENTS = {}
 _EVENT_LOCK = threading.Lock()
 _MAX_AUDIO = 20 * 1024 * 1024
+_MAX_IMAGE = 20 * 1024 * 1024
 
 # action -> (stages it may start from, stage it lands in)
 # Every pipeline step is an explicit route; anything absent is INVALID_ACTION.
@@ -150,9 +156,16 @@ def classify_approval(text, awaiting):
         return "unclear", None
     # Negation wins over any approve word the sentence also contains:
     # "jangan lanjut" and "gak setuju" both carry an approve token.
-    if any(word in low for word in _REJECT_WORDS):
+    # Phrase lists are matched as whole words: "pas" must not fire inside
+    # "napas", and "ganti" must stay a rejection even next to "setuju".
+    words = set(re.findall(r"[a-z]+", low))
+    phrase_hit = lambda table: any(
+        (set(re.findall(r"[a-z]+", phrase)) <= words) if " " in phrase else (phrase in words)
+        for phrase in table)
+
+    if phrase_hit(_REJECT_WORDS):
         return "reject", None
-    approve = any(word in low for word in _APPROVE_WORDS)
+    approve = phrase_hit(_APPROVE_WORDS)
     if not approve:
         return "unclear", None
     named = {stage for stage, words in _STAGE_WORDS.items() if any(w in low for w in words)}
@@ -305,6 +318,42 @@ def _attachment(store, job_id, requested):
         raise DomainError('INVALID_ATTACHMENT', 'audio exceeds size limit')
     name = secrets.token_urlsafe(12) + source.suffix
     directory = owned(store.root, Path('jobs') / job_id / 'voice')
+    directory.mkdir(mode=0o700, exist_ok=True)
+    with (directory / name).open('xb') as destination:
+        destination.write(data)
+    return name
+
+
+def _image_attachment(store, job_id, requested):
+    """Copy the current Telegram image into the job's storyboard slot.
+
+    Same containment rules as audio: only a regular, owned file from the
+    runtime image cache, opened with O_NOFOLLOW so an alias cannot be swapped in
+    between the check and the read.
+    """
+    from gateway.platforms.base import get_image_cache_dir
+    home = _home()
+    cache = Path(get_image_cache_dir())
+    if cache not in (home / 'cache/images', home / 'image_cache') or cache.resolve() != cache:
+        raise DomainError('INVALID_ATTACHMENT', 'runtime image cache outside profile')
+    p = Path(requested or '')
+    if p.parent != cache or not re.fullmatch(r'img_[0-9a-f]{12}\.(jpg|jpeg|png|webp)', p.name):
+        raise DomainError('INVALID_ATTACHMENT', 'expected the current Telegram image attachment')
+    source = owned(cache, p.name)
+    try:
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as stream:
+            import stat
+            st = os.fstat(stream.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or not 0 < st.st_size <= _MAX_IMAGE:
+                raise DomainError('INVALID_ATTACHMENT', 'image must be a regular owned file up to 20 MiB')
+            data = stream.read(_MAX_IMAGE + 1)
+    except OSError as exc:
+        raise DomainError('INVALID_ATTACHMENT', 'cached image no longer available') from exc
+    if not 0 < len(data) <= _MAX_IMAGE:
+        raise DomainError('INVALID_ATTACHMENT', 'image exceeds size limit')
+    name = secrets.token_urlsafe(12) + source.suffix
+    directory = owned(store.root, Path('jobs') / job_id / 'storyboard')
     directory.mkdir(mode=0o700, exist_ok=True)
     with (directory / name).open('xb') as destination:
         destination.write(data)
@@ -536,6 +585,7 @@ def _job(store, action, payload):
         'write_naskah': (('job_id', 'rev', 'naskah', 'cue'), ()),
         'import_naskah': (('job_id', 'rev', 'naskah', 'cue'), ('origin',)),
         'select_style': (('job_id', 'rev', 'style_id'), ()),
+        'attach_storyboard': (('job_id', 'rev', 'storyboard'), ()),
     }.get(action)
     if shape is None:
         raise DomainError('INVALID_ACTION', 'unsupported job operation')
@@ -564,6 +614,22 @@ def _job(store, action, payload):
     rev = _revision(payload['rev'])
     if rev != current['rev']:
         raise DomainError('STALE_REVISION', f"expected {current['rev']}")
+    if action == 'attach_storyboard':
+        # The storyboard is a reference image the operator drops in after the
+        # script is approved; the render targets derive their shot list from it.
+        if current['stage'] not in ('naskah_approved', 'storyboard'):
+            raise DomainError('STAGE_ORDER',
+                              f"attach_storyboard requires naskah_approved (at {current['stage']})")
+        if not isinstance(payload['storyboard'], str):
+            raise DomainError('INVALID_PAYLOAD', 'storyboard must be an attachment path')
+        blob = _image_attachment(store, job, payload['storyboard'])
+        try:
+            data = store.revise(job, rev, {'storyboard': blob})
+            store.set_stage(job, rev, 'storyboard', f'attach storyboard {blob}')
+        except Exception:
+            owned(store.root, Path('jobs') / job / 'storyboard' / blob).unlink(missing_ok=True)
+            raise
+        return {**data, 'storyboard': blob, 'stage': store.get(job)['stage']}
     if action == 'annotate':
         return store.annotate(job, rev, payload['t_ms'], payload.get('cue_id'), payload['text'])
     if action == 'approve':
