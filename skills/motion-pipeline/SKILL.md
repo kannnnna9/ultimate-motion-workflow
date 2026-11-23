@@ -20,7 +20,7 @@ Job berjalan melalui stage yang berurutan. Server menolak lompatan dengan `STAGE
 
 ```
 intake → brief_draft → brief_approved → research_draft → research_approved
-       → style_approved → naskah_draft → naskah_approved → style_frame → preview → final_ready
+       → style_approved → naskah_draft → naskah_approved → storyboard → style_frame → preview → final_ready
 ```
 
 **Jangan pernah meminta operator memberi brief lengkap di awal.** Mulai dari topik. Brief, riset, dan naskah adalah hasil kerja yang ditawarkan kepada operator untuk disetujui.
@@ -34,7 +34,8 @@ intake → brief_draft → brief_approved → research_draft → research_approv
 | `research_approved` | `select_style` | `style_approved` |
 | `style_approved` | `write_naskah` dengan `naskah` + `cue` | `naskah_draft` |
 | `naskah_draft` | `approve naskah` | `naskah_approved` |
-| `style_approved` | `ump_render` target `style_frame` | `style_frame` |
+| `naskah_approved` | operator mengirim gambar storyboard (`attach_storyboard`) | `storyboard` |
+| `storyboard` | `ump_render` target `style_frame` | `style_frame` |
 | `style_frame` | `approve script_style` | `preview` |
 | `preview` | `approve preview` | `final_ready` |
 
@@ -43,13 +44,14 @@ intake → brief_draft → brief_approved → research_draft → research_approv
 ## Langkah
 
 1. **Mulai dari topik.** Buat job lewat `ump_job` aksi `create` dengan topik sebagai `brief`. Simpan job ID dan revisinya di jawaban.
-2. **Susun brief dan minta approval.** Tulis `set_brief` dengan `patch.brief` berisi topik, audiens, durasi target, sudut cerita, dan bahan yang boleh dipakai. Render snapshot dokumen lewat `ump_render` target `brief`, tampilkan isinya, lalu minta operator menyetujuinya dengan kalimat biasa. Tampilkan juga `UMP APPROVE <job_id> <rev> brief <artifact_id>` sebagai alternatif bila operator mau memakai bentuk persis.
-3. **Riset.** Setelah `brief_approved`, cari sumber nyata dengan `web_search`/`web_extract`. Kirim `research` dengan `sources` berisi `{id, url}`. Minimal satu sumber; naskah non-fiksi tidak boleh tanpa sumber. Render target `research` dan minta persetujuan; tampilkan bentuk `UMP APPROVE`-nya sebagai alternatif.
+2. **Susun brief dan minta approval.** Tulis `set_brief` dengan `patch.brief` berisi topik, audiens, durasi target, sudut cerita, dan bahan yang boleh dipakai. Render snapshot dokumen lewat `ump_render` target `brief`, tampilkan isinya, lalu minta operator menyetujuinya dengan kalimat biasa. Minta approval dengan kalimat biasa ("setuju", "lanjut", "gas"); bentuk persis hanya untuk skrip.
+3. **Riset.** Setelah `brief_approved`, cari sumber nyata dengan `web_search`/`web_extract`. Kirim `research` dengan `sources` berisi `{id, url}`. Minimal satu sumber; naskah non-fiksi tidak boleh tanpa sumber. Render target `research` dan minta persetujuan dengan kalimat biasa.
 4. **Pilih style.** Setelah `research_approved`, panggil `ump_styles` dan tawarkan preset dengan `renderable: true`. Operator memilih, lalu kirim `select_style`. Style dipilih **sebelum** naskah karena naskah ditulis untuk mengisi register visual itu, bukan sebaliknya.
 5. **Tulis naskah terhadap style itu.** Kirim `write_naskah` dengan `naskah` dan `cue`. Setiap beat wajib punya `fact_refs` yang menunjuk ke `id` sumber yang sudah disetujui; kalau tidak, server menolak dengan `FACT_REFS`. Panjang kalimat, jumlah kata per beat, dan pemenggalan baris disesuaikan dengan gaya yang dipilih. Render target `naskah`, tampilkan, lalu minta persetujuan.
 6. **VO.** Untuk VO operator, minta kirim file audio Telegram dengan caption persis `UMP VO <job_id> <rev>`; lalu gunakan `revise` dengan `import_voice: true` pada turn itu. Jangan gunakan URL, path, file lama, atau teks hasil transkripsi sebagai bukti lampiran. Minta izin sebelum memilih Edge TTS karena naskah dikirim ke layanan tersebut.
-7. **Style frame.** Panggil `ump_render` dengan `target: "style_frame"`. Kembalikan job ID, revisi, dan run ID; operator mengecek lewat `ump_job` aksi `get`. Jangan menunggu dalam turn.
-8. **Tampilkan dan setujui.** Panggil `ump_artifact`, tampilkan style frame, dan minta persetujuan; tampilkan bentuk `UMP APPROVE`-nya sebagai alternatif.
+7. **Storyboard.** Setelah naskah disetujui, tawarkan pembuatan storyboard: kirim brief berisi naskah final per beat (dengan timestamp), spesifikasi teknis, dan satu gambar referensi. Sarankan operator membuat storyboard di ChatGPT, lalu kirim gambarnya ke chat. Simpan dengan `attach_storyboard` (`storyboard` berisi path lampiran gambar). Kalau operator tidak mau storyboard, target `style_frame` tetap bisa dipanggil karena stage `storyboard` hanya mensyaratkan naskah disetujui.
+8. **Style frame.** Panggil `ump_render` dengan `target: "style_frame"`. Kembalikan job ID, revisi, dan run ID; operator mengecek lewat `ump_job` aksi `get`. Jangan menunggu dalam turn.
+9. **Tampilkan dan setujui.** Panggil `ump_artifact`, tampilkan style frame, dan minta persetujuan; tampilkan bentuk `UMP APPROVE`-nya sebagai alternatif.
 9. **Preview dan final.** Minta persetujuan untuk preview yang baru ditampilkan, lalu jalankan `final`.
 10. **Catat revisi.** `annotate` dengan `job_id`, `rev`, `t_ms`, opsional `cue_id` dan `text`. Edit timing lewat `revise` dengan `patch.cues`, misalnya `{"c007":{"t_ms":9200}}`. Revisi yang menyentuh naskah setelah approval menurunkan stage dan membatalkan approval hilir.
 
@@ -70,7 +72,7 @@ Kalimat yang menyebut artefak lain (mis. "setuju naskahnya" saat yang menunggu b
 
 **Aturan yang tidak boleh dilanggar:** bukti persetujuan selalu pesan masuk operator, tidak pernah teks assistant. Kamu tidak boleh menyimpulkan persetujuan dari kalimatmu sendiri, dari ringkasanmu, atau dari jawaban implisit. Bila server membalas `APPROVAL_UNCLEAR`, tampilkan tombol Ya/Tidak atau tanyakan sekali secara eksplisit — jangan mengulang perintah yang sama dan jangan menganggapnya sudah disetujui.
 
-Bentuk `UMP APPROVE <job_id> <rev> <stage> <artifact_id>` tetap berlaku untuk operator yang ingin mengunci persetujuan ke artefak tertentu, dan untuk skrip.
+Approval di chat cukup kalimat eksplisit: "setuju", "ya setuju", "lanjut", "gas", "sip", "mantap". Permintaan perubahan ("ganti", "revisi", "perbaiki", "kurang") dibaca sebagai penolakan. Bentuk `UMP APPROVE <job_id> <rev> <stage> <artifact_id>` tidak lagi diperlukan di chat; ia hanya tersisa untuk skrip dan operator yang ingin mengunci persetujuan ke artefak tertentu.
 
 ## 1. Pilih style sebelum naskah ditulis
 
