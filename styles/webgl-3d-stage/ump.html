@@ -324,7 +324,10 @@ if (gl) {
   const lerp3 = (a, b, p) => [lerp(a[0], b[0], p), lerp(a[1], b[1], p), lerp(a[2], b[2], p)];
   const easeInOut = p => p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
 
-  window.__SHOT_SPAN__ = null;
+  // Shot spans are derived from the episode cues: each cue starts a beat, and the
+// shot for that beat runs until the next one. Leaving this null made drawScene
+// return before drawing anything, so every frame showed a stale scene.
+window.__SHOT_SPAN__ = null;
 
   drawScene = () => {
     gl.viewport(0, 0, 1080, 1920);
@@ -401,6 +404,7 @@ function refreshSpans(total) {
     end: cueWindows[i + 1] ? cueWindows[i + 1].at : total,
   }));
 }
+
 
 function syncBeats(t) {
   let current = null;
