@@ -436,21 +436,65 @@ def _record_frames(directory, project, command):
 
     The recorder writes PNG frames; encoding happens here so the rest of the
     pipeline still receives exactly one frames.mp4 like the HyperFrames path.
+
+    A capture that was cut short (worker killed, machine restarted, an encoding
+    run interrupted) leaves its PNGs behind. If the frame count already matches
+    the expected duration, skip the capture and only re-encode: re-recording 680
+    frames costs minutes and gains nothing.
     """
     fps = 30
     raw = directory / 'framesraw'
-    node = ['node', str(ROOT / 'scripts' / 'record_frames.mjs'),
-            str(project), str(directory / 'frames.mp4'), str(fps)]
-    # The recorder owns framesraw and clears it itself, so no pre-clean here:
-    # doing both made the existence check race the capture on a rerun.
-    command(node, project)
+    expected = None
+    try:
+        meta = json.loads((project / 'meta.json').read_text(encoding='utf-8'))
+        fps = int(meta.get('fps') or 30)
+        duration = meta.get('duration_s') or meta.get('duration') or meta.get('durationSeconds')
+        if duration:
+            expected = round(float(duration) * fps)
+    except (OSError, ValueError, TypeError):
+        expected = None
+    captured = len(list(raw.glob('f*.png'))) if raw.is_dir() else 0
+    complete = expected is not None and captured >= expected
+    if complete and _frames_intact(directory / 'frames.mp4'):
+        return  # nothing to do: the capture and its encode both survived
+    if not complete:
+        node = ['node', str(ROOT / 'scripts' / 'record_frames.mjs'),
+                str(project), str(directory / 'frames.mp4'), str(fps)]
+        # The recorder owns framesraw and clears it itself: a pre-clean here made
+        # the existence check race the capture when a run was retried.
+        command(node, project)
     if not raw.is_dir() or not any(raw.iterdir()):
         raise DomainError('RENDER_FAILED', 'recorder produced no frames')
+    frames = sorted(raw.glob('f*.png'))
+    if expected is not None and len(frames) < expected:
+        raise DomainError('RENDER_FAILED',
+                          f'recorder captured {len(frames)} of {expected} frames')
     command(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-framerate', str(fps),
              '-i', str(raw / 'f%05d.png'), '-c:v', 'libx264', '-profile:v', 'high',
              '-pix_fmt', 'yuv420p', '-crf', '18', '-threads', '2', str(directory / 'frames.mp4')], project)
     if not (directory / 'frames.mp4').is_file():
         raise DomainError('RENDER_FAILED', 'frame encode produced no video')
+
+
+def _frames_intact(path):
+    """True when `path` looks like a finished MP4.
+
+    An interrupted encode leaves a header-only file with no `moov` atom. This
+    checks the box structure directly instead of shelling out to ffprobe, whose
+    helper exits the process on a failed probe — which would kill the worker
+    rather than let it re-encode.
+    """
+    try:
+        size = path.stat().st_size
+        if size < 1024:
+            return False
+        with path.open('rb') as stream:
+            head = stream.read(64)
+            stream.seek(max(0, size - (8 << 20)))
+            tail = stream.read()
+    except OSError:
+        return False
+    return head[4:8] == b'ftyp' and b'moov' in tail
 
 
 def _document(store, run, directory):

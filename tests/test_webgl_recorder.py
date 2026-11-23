@@ -71,6 +71,47 @@ class WebglRecorderRoutingTests(unittest.TestCase):
         worker._record_frames(directory, self.root, fake_command)
         self.assertTrue((directory / "frames.mp4").is_file())
 
+    def test_a_finished_capture_is_not_recorded_again(self):
+        """An interrupted encode leaves the PNGs; re-encoding is enough and the
+        capture (minutes of GPU time) must not be repeated."""
+        directory = self.root / "run"
+        raw = directory / "framesraw"
+        raw.mkdir(parents=True)
+        project = self.root / "project"
+        project.mkdir()
+        (project / "meta.json").write_text(json.dumps({"fps": 30, "duration_s": 0.1}))
+        for i in range(3):
+            (raw / f"f{i:05d}.png").write_bytes(b"png")
+
+        calls = []
+
+        def fake_command(argv, cwd=None):
+            calls.append(argv)
+            if "libx264" in argv:
+                (directory / "frames.mp4").write_bytes(b"mp4")
+
+        with mock.patch.object(worker, "_frames_intact", return_value=False):
+            worker._record_frames(directory, project, fake_command)
+        joined = [" ".join(map(str, c)) for c in calls]
+        self.assertFalse(any("record_frames.mjs" in j for j in joined),
+                         "capture was repeated although every frame was already present")
+        self.assertTrue(any("libx264" in j for j in joined))
+
+    def test_a_partial_capture_is_refused_rather_than_encoded(self):
+        directory = self.root / "run"
+        raw = directory / "framesraw"
+        raw.mkdir(parents=True)
+        project = self.root / "project"
+        project.mkdir()
+        (project / "meta.json").write_text(json.dumps({"fps": 30, "duration_s": 1.0}))
+        (raw / "f00000.png").write_bytes(b"png")
+
+        def fake_command(argv, cwd=None):
+            pass  # capture "runs" but produces nothing new
+
+        with self.assertRaisesRegex(DomainError, "recorder captured"):
+            worker._record_frames(directory, project, fake_command)
+
 
 if __name__ == "__main__":
     unittest.main()

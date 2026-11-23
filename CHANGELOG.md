@@ -4,6 +4,13 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-11-23
+
+### Fixed
+- Rekaman WebGL melanjutkan dari frame yang sudah ada. Kalau `framesraw` sudah berisi jumlah frame sesuai `meta.json`, capture dilewati dan hanya encoding yang dijalankan ulang — rekaman yang terputus di tengah tidak lagi mengulang tujuh menit kerja GPU. Terukur: run yang terputus selesai dalam 32,6 detik, bukan ~7 menit.
+- Capture yang tidak lengkap ditolak dengan `RENDER_FAILED: recorder captured N of M frames`, bukan di-encode menjadi video yang lebih pendek dari narasinya.
+- `_frames_intact` memeriksa struktur MP4 langsung (`ftyp` + `moov`) alih-alih memanggil `probe`. Helper `probe` memanggil `sys.exit` saat ffprobe gagal, sehingga pengecekan file yang rusak justru mematikan worker alih-alih memicu encode ulang.
+
 ## [1.6.1] - 2026-11-23
 
 ### Fixed
