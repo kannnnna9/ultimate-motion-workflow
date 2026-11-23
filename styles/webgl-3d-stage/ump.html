@@ -13,7 +13,10 @@
   #gl { position: absolute; inset: 0; width: 1080px; height: 1920px; display: block; }
   .hud-top { position: absolute; left: 96px; right: 96px; top: 96px; display: flex; justify-content: space-between; align-items: center; font: 700 24px "DejaVu Sans Mono", monospace; letter-spacing: 3px; color: rgba(246,241,231,0.68); z-index: 3; }
   .hud-pill { padding: 8px 18px; border: 1px solid rgba(255,122,47,0.45); border-radius: 999px; background: rgba(7,11,20,0.55); color: var(--gold); }
+  /* Card placement is per beat: the storyboard puts text away from the subject. */
   .beat { position: absolute; left: 96px; right: 96px; top: 210px; opacity: 0; z-index: 3; pointer-events: none; }
+  .beat.lower { top: auto; bottom: 268px; }
+  .beat.upper { top: 152px; }
   .label { color: var(--accent); font: 700 26px "DejaVu Sans Mono", monospace; letter-spacing: 5px; text-transform: uppercase; margin-bottom: 14px; }
   h2 { font-size: 74px; line-height: 1.04; margin: 0 0 18px 0; color: var(--ink); text-shadow: 0 12px 34px rgba(0,0,0,0.65); }
   p { font-size: 35px; line-height: 1.34; margin: 0; max-width: 830px; color: rgba(246,241,231,0.88);
@@ -21,9 +24,7 @@
       -webkit-box-orient: vertical; overflow: hidden; }
   .progress-wrap { position: absolute; left: 96px; right: 96px; bottom: 130px; height: 6px; background: rgba(255,255,255,0.12); border-radius: 999px; overflow: hidden; z-index: 3; }
   .rail { width: 100%; height: 100%; background: linear-gradient(90deg, var(--accent), var(--gold)); transform-origin: left center; transform: scaleX(0); }
-  /* The spoken line, drawn here because this style sets draws_captions and the
-     ASS subtitle track is not burned in. Sits inside the caption safe area. */
-  /* Cards are the only text layer: no caption competes with them. */
+  /* Cards are the only text layer: the ASS subtitle track is not burned in. */
   #cap { display: none; }
 </style>
 </head>
@@ -44,8 +45,9 @@ const ep = window.__EPISODE__;
 const canvas = document.getElementById('gl');
 const gl = canvas.getContext('webgl', { antialias: true, alpha: true, preserveDrawingBuffer: true });
 
-// Minimal deterministic 3D math + lighting engine
+/* ---------- math ---------- */
 function m4() { return new Float32Array(16); }
+function identity() { const o = m4(); o[0] = o[5] = o[10] = o[15] = 1; return o; }
 function perspective(fov, aspect, near, far) {
   const f = 1 / Math.tan(fov / 2), nf = 1 / (near - far), o = m4();
   o[0] = f / aspect; o[5] = f; o[10] = (far + near) * nf; o[11] = -1; o[14] = 2 * far * near * nf;
@@ -57,61 +59,54 @@ function mul(a, b) {
     o[c * 4 + r] = a[r] * b[c * 4] + a[r + 4] * b[c * 4 + 1] + a[r + 8] * b[c * 4 + 2] + a[r + 12] * b[c * 4 + 3];
   return o;
 }
+const translation = (x, y, z) => { const o = identity(); o[12] = x; o[13] = y; o[14] = z; return o; };
+const scaling = (x, y, z) => { const o = identity(); o[0] = x; o[5] = y; o[10] = z; return o; };
+function rotX(a) { const o = identity(), c = Math.cos(a), s = Math.sin(a); o[5] = c; o[6] = s; o[9] = -s; o[10] = c; return o; }
+function rotY(a) { const o = identity(), c = Math.cos(a), s = Math.sin(a); o[0] = c; o[2] = -s; o[8] = s; o[10] = c; return o; }
+function rotZ(a) { const o = identity(), c = Math.cos(a), s = Math.sin(a); o[0] = c; o[1] = s; o[4] = -s; o[5] = c; return o; }
 function xform(tx, ty, tz, rx, ry, rz, sx, sy, sz) {
-  const cx = Math.cos(rx), sxn = Math.sin(rx), cy = Math.cos(ry), syn = Math.sin(ry), cz = Math.cos(rz), szn = Math.sin(rz);
-  const o = m4();
-  o[0] = cy * cz * sx; o[1] = (sxn * syn * cz + cx * szn) * sx; o[2] = (-cx * syn * cz + sxn * szn) * sx;
-  o[4] = -cy * szn * sy; o[5] = (-sxn * syn * szn + cx * cz) * sy; o[6] = (cx * syn * szn + sxn * cz) * sy;
-  o[8] = syn * sz; o[9] = -sxn * cy * sz; o[10] = cx * cy * sz;
-  o[12] = tx; o[13] = ty; o[14] = tz; o[15] = 1;
-  return o;
+  return mul(mul(translation(tx, ty, tz), mul(rotY(ry), mul(rotX(rx), rotZ(rz)))), scaling(sx, sy, sz));
 }
 
+/* ---------- shaders ---------- */
 let drawScene = () => {};
 if (gl) {
   const vs = `
-    attribute vec3 aPos;
-    attribute vec3 aNorm;
-    uniform mat4 uProj;
-    uniform mat4 uModel;
-    varying vec3 vNorm;
-    varying vec3 vWorld;
+    attribute vec3 aPos; attribute vec3 aNorm;
+    uniform mat4 uProj, uModel;
+    varying vec3 vNorm, vEye;
     void main() {
-      vec4 w = uModel * vec4(aPos, 1.0);
-      vWorld = w.xyz;
-      vNorm = mat3(uModel) * aNorm;
-      gl_Position = uProj * w;
+      vec4 world = uModel * vec4(aPos, 1.0);
+      vEye = world.xyz;
+      vNorm = normalize((uModel * vec4(aNorm, 0.0)).xyz);
+      gl_Position = uProj * world;
     }`;
   const fs = `
     precision mediump float;
-    varying vec3 vNorm;
-    varying vec3 vWorld;
-    uniform vec3 uColor;
-    uniform vec3 uRim;
-    uniform float uAlpha;
+    varying vec3 vNorm, vEye;
+    uniform vec3 uColor, uRim;
+    uniform float uAlpha, uSpec;
     void main() {
       vec3 n = normalize(vNorm);
-      vec3 l1 = normalize(vec3(0.55, 0.8, 0.9));
-      vec3 l2 = normalize(vec3(-0.8, -0.3, 0.5));
+      vec3 viewDir = normalize(-vEye);
+      vec3 l1 = normalize(vec3(-0.55, 0.75, 0.6));
+      vec3 l2 = normalize(vec3(0.7, -0.2, 0.5));
       float diff = max(dot(n, l1), 0.0);
       float fill = max(dot(n, l2), 0.0) * 0.35;
-      vec3 viewDir = normalize(-vWorld);
       float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 2.4);
       vec3 h = normalize(l1 + viewDir);
-      float spec = pow(max(dot(n, h), 0.0), 36.0) * 0.55;
+      float spec = pow(max(dot(n, h), 0.0), 36.0) * uSpec;
       vec3 col = uColor * (0.24 + diff * 0.85 + fill) + uRim * rim * 0.65 + vec3(1.0) * spec;
       gl_FragColor = vec4(col, uAlpha);
     }`;
-  const compile = (t, src) => {
-    const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s); return s;
-  };
+  const compile = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s); return s; };
   const prog = gl.createProgram();
   gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
   gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
   gl.linkProgram(prog);
   gl.useProgram(prog);
 
-  // Build smooth lathe/cylinder + sphere geometries
+  /* ---------- geometry ---------- */
   function makeLathe(profile, segs = 28) {
     const pos = [], norm = [], idx = [];
     for (let i = 0; i < profile.length; i++) {
@@ -128,23 +123,20 @@ if (gl) {
       }
     }
     const stride = segs + 1;
-    for (let i = 0; i < profile.length - 1; i++) {
-      for (let j = 0; j < segs; j++) {
-        const a = i * stride + j, b = a + stride;
-        idx.push(a, b, a + 1, b, b + 1, a + 1);
-      }
+    for (let i = 0; i < profile.length - 1; i++) for (let j = 0; j < segs; j++) {
+      const a = i * stride + j, b = a + stride;
+      idx.push(a, b, a + 1, b, b + 1, a + 1);
     }
     return { pos: new Float32Array(pos), norm: new Float32Array(norm), idx: new Uint16Array(idx) };
   }
-
   function makeSphere(r = 1, lat = 14, lon = 20) {
     const pos = [], norm = [], idx = [];
     for (let i = 0; i <= lat; i++) {
       const th = (i / lat) * Math.PI, st = Math.sin(th), ct = Math.cos(th);
       for (let j = 0; j <= lon; j++) {
         const ph = (j / lon) * Math.PI * 2, cp = Math.cos(ph), sp = Math.sin(ph);
-        const x = st * cp, y = ct, z = st * sp;
-        pos.push(r * x, r * y, r * z); norm.push(x, y, z);
+        pos.push(r * st * cp, r * ct, r * st * sp);
+        norm.push(st * cp, ct, st * sp);
       }
     }
     const s = lon + 1;
@@ -154,22 +146,41 @@ if (gl) {
     }
     return { pos: new Float32Array(pos), norm: new Float32Array(norm), idx: new Uint16Array(idx) };
   }
-
-  function upload(g) {
+  function makeBox() {
+    const p = [], n = [], idx = [];
+    const faces = [
+      [[0,0,1], [[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]]],
+      [[0,0,-1],[[1,-1,-1],[-1,-1,-1],[-1,1,-1],[1,1,-1]]],
+      [[1,0,0], [[1,-1,1],[1,-1,-1],[1,1,-1],[1,1,1]]],
+      [[-1,0,0],[[-1,-1,-1],[-1,-1,1],[-1,1,1],[-1,1,-1]]],
+      [[0,1,0], [[-1,1,1],[1,1,1],[1,1,-1],[-1,1,-1]]],
+      [[0,-1,0],[[-1,-1,-1],[1,-1,-1],[1,-1,1],[-1,-1,1]]],
+    ];
+    faces.forEach(([nm, quad], k) => {
+      const base = k * 4;
+      quad.forEach(v => { p.push(v[0], v[1], v[2]); n.push(nm[0], nm[1], nm[2]); });
+      idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    });
+    return { pos: new Float32Array(p), norm: new Float32Array(n), idx: new Uint16Array(idx) };
+  }
+  const upload = g => {
     const pb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, pb); gl.bufferData(gl.ARRAY_BUFFER, g.pos, gl.STATIC_DRAW);
     const nb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, nb); gl.bufferData(gl.ARRAY_BUFFER, g.norm, gl.STATIC_DRAW);
     const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, g.idx, gl.STATIC_DRAW);
     return { pb, nb, ib, count: g.idx.length };
-  }
+  };
 
-  // Bottle silhouette + ring + sphere
-  const bottle = upload(makeLathe([
+  const bottleMesh = upload(makeLathe([
     [0.01, -1.65], [0.58, -1.65], [0.64, -1.52], [0.62, -0.65],
     [0.54, 0.15], [0.60, 0.45], [0.52, 0.82], [0.28, 1.18],
     [0.24, 1.56], [0.29, 1.62], [0.25, 1.68], [0.01, 1.68]
   ], 32));
-  const cap = upload(makeLathe([[0.01, 1.66], [0.30, 1.66], [0.30, 1.82], [0.01, 1.82]], 24));
-  const orb = upload(makeSphere(1, 14, 20));
+  const capMesh = upload(makeLathe([[0.01, 1.66], [0.30, 1.66], [0.30, 1.82], [0.01, 1.82]], 24));
+  const jarMesh = upload(makeLathe([
+    [0.01, -1.9], [0.72, -1.9], [0.78, -1.78], [0.78, 1.05], [0.70, 1.16], [0.01, 1.16]
+  ], 32));
+  const sphereMesh = upload(makeSphere(1, 14, 20));
+  const boxMesh = upload(makeBox());
 
   const aPos = gl.getAttribLocation(prog, 'aPos');
   const aNorm = gl.getAttribLocation(prog, 'aNorm');
@@ -178,23 +189,142 @@ if (gl) {
   const uColor = gl.getUniformLocation(prog, 'uColor');
   const uRim = gl.getUniformLocation(prog, 'uRim');
   const uAlpha = gl.getUniformLocation(prog, 'uAlpha');
+  const uSpec = gl.getUniformLocation(prog, 'uSpec');
 
-  const proj = perspective(0.75, 1080 / 1920, 0.1, 40);
-  gl.uniformMatrix4fv(uProj, false, proj);
-
-  function drawMesh(m, model, col, rim, alpha = 1) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, m.pb); gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, m.nb); gl.enableVertexAttribArray(aNorm); gl.vertexAttribPointer(aNorm, 3, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.ib);
+  function drawMesh(mesh, model, col, rim, alpha = 1, spec = 0.55) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.pb); gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.nb); gl.enableVertexAttribArray(aNorm); gl.vertexAttribPointer(aNorm, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.ib);
     gl.uniformMatrix4fv(uModel, false, model);
     gl.uniform3fv(uColor, col);
     gl.uniform3fv(uRim, rim);
     gl.uniform1f(uAlpha, alpha);
-    gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
+    gl.uniform1f(uSpec, spec);
+    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
   }
 
-  const state = { t: 0, camZ: -6.2, camY: -0.35, rotY: 0, rotX: 0.14, spread: 1 };
-  window.__3D_STATE__ = state;
+  /* ---------- shots (one per beat, straight from the storyboard) ---------- */
+  const SHOTS = [
+    { // B001 medium, low angle, dolly in + orbit; ice and sugar spin
+      fov: 0.78,
+      from: { pos: [0, -1.45, -9.4], tgt: [0, 0.10, 0] },
+      to:   { pos: [0, -0.80, -6.5], tgt: [0, 0.28, 0] },
+      hero: 'bottle',
+      props: (p, t) => {
+        const out = [];
+        for (let i = 0; i < 14; i++) {
+          const a = t * 1.9 + i * 0.449, rad = 1.75 + (i % 4) * 0.30;
+          const y = -1.5 + ((i * 0.53 + t * 0.8) % 2.9);
+          out.push({ mesh: boxMesh, col: [0.72, 0.86, 1.0], rim: [0.9, 0.97, 1.0], alpha: 0.55, spec: 1.0,
+                     m: xform(Math.cos(a) * rad, y, Math.sin(a) * rad, a * 0.9, a * 0.7, a * 0.4, 0.13, 0.13, 0.13) });
+        }
+        return out;
+      },
+    },
+    { // B002 close up, eye level, pan right; kola nuts drop into a jar
+      fov: 0.72,
+      from: { pos: [-2.3, 0.28, -5.0], tgt: [-0.35, 0.05, 0] },
+      to:   { pos: [2.1, 0.10, -5.4], tgt: [0.30, -0.10, 0] },
+      hero: 'jar',
+      props: (p, t) => {
+        const out = [];
+        for (let i = 0; i < 8; i++) {
+          const cycle = (t * 0.62 + i * 0.19) % 1;
+          const y = 2.35 - cycle * 3.6;
+          const x = -1.15 + i * 0.33;
+          out.push({ mesh: sphereMesh, col: [0.34, 0.16, 0.07], rim: [0.95, 0.62, 0.28], alpha: 1, spec: 0.7,
+                     m: xform(x, y, -0.22 + (i % 3) * 0.02, cycle * 9 + i, cycle * 5, 0, 0.15, 0.19, 0.15) });
+        }
+        out.push({ mesh: sphereMesh, col: [0.30, 0.09, 0.03], rim: [1.0, 0.5, 0.2], alpha: 0.42, spec: 0.4,
+                   m: xform(0, -1.05, 0, 0, 0, 0, 0.70, 0.55, 0.70) });
+        return out;
+      },
+    },
+    { // B003 hero shot, slight high angle, 180 degree orbit; citrus + spice vortex
+      fov: 0.70, orbit: Math.PI,
+      from: { pos: [0, 0.95, -5.9], tgt: [0, 0.10, 0] },
+      to:   { pos: [0, 0.55, -6.4], tgt: [0, 0.05, 0] },
+      hero: 'bottle',
+      props: (p, t) => {
+        const out = [];
+        const rings = [
+          { n: 4, rad: 1.45, y: 0.55, speed: 1.5, size: 0.20, col: [1.0, 0.52, 0.14], rim: [1.0, 0.82, 0.45] },
+          { n: 3, rad: 1.78, y: -0.15, speed: -1.1, size: 0.17, col: [0.94, 0.86, 0.28], rim: [1.0, 0.95, 0.6] },
+          { n: 3, rad: 1.20, y: -0.75, speed: 1.9, size: 0.13, col: [0.55, 0.30, 0.12], rim: [0.95, 0.68, 0.35] },
+        ];
+        rings.forEach((ring, ri) => {
+          for (let i = 0; i < ring.n; i++) {
+            const a = t * ring.speed + i * (Math.PI * 2 / ring.n) + ri * 0.9;
+            const y = ring.y + Math.sin(t * 1.3 + i) * 0.18;
+            out.push({ mesh: sphereMesh, col: ring.col, rim: ring.rim, alpha: 0.96, spec: 0.85,
+                       m: xform(Math.cos(a) * ring.rad, y, Math.sin(a) * ring.rad, a, a * 0.5, 0, ring.size, ring.size, ring.size) });
+          }
+        });
+        return out;
+      },
+    },
+    { // B004 close up, dutch angle, tilt; caramel splash hits the bottle
+      fov: 0.80, dutch: 0.16,
+      from: { pos: [1.5, -0.35, -4.4], tgt: [0.10, 0.05, 0] },
+      to:   { pos: [-1.2, 0.35, -4.9], tgt: [-0.05, 0.10, 0] },
+      hero: 'bottle',
+      props: (p, t) => {
+        const out = [];
+        for (let i = 0; i < 18; i++) {
+          const ph = (t * 0.9 + i * 0.0833) % 1, ang = i * 0.349 + 0.4;
+          const r = 0.35 + ph * 1.75;
+          const y = 0.55 + Math.sin(ph * Math.PI) * 1.05 - ph * 0.55;
+          const s = 0.075 * (1 - ph * 0.45);
+          out.push({ mesh: sphereMesh, col: [0.26, 0.10, 0.03], rim: [1.0, 0.62, 0.22], alpha: 0.92, spec: 1.0,
+                     m: xform(Math.cos(ang) * r, y, Math.sin(ang) * r * 0.7, ang, ang * 0.4, 0, s, s * 1.5, s) });
+        }
+        return out;
+      },
+    },
+    { // B005 extreme close up, low angle, rise; bubbles climb past the cap
+      fov: 0.62, focusCap: true,
+      from: { pos: [0, -0.55, -3.5], tgt: [0, 1.35, 0] },
+      to:   { pos: [0, 0.35, -3.2], tgt: [0, 1.55, 0] },
+      hero: 'bottle',
+      props: (p, t) => {
+        const out = [];
+        for (let i = 0; i < 26; i++) {
+          const ph = (t * 0.85 + i * 0.0385) % 1;
+          const ang = i * 2.399 + t * 0.6, r = 0.28 + (i % 5) * 0.075, s = 0.030 + (i % 4) * 0.011;
+          out.push({ mesh: sphereMesh, col: [1.0, 0.96, 0.90], rim: [1.0, 0.80, 0.45], alpha: 0.55, spec: 1.0,
+                     m: xform(Math.cos(ang) * r, 0.85 + ph * 1.7, Math.sin(ang) * r, 0, 0, 0, s, s, s) });
+        }
+        return out;
+      },
+    },
+  ];
+
+  /* ---------- camera ---------- */
+  function lookAt(eye, target) {
+    const f = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+    const fl = Math.hypot(f[0], f[1], f[2]) || 1;
+    f[0] /= fl; f[1] /= fl; f[2] /= fl;
+    // right = normalize(f x up), computed in full: the camera is not always level,
+    // and the horizontal-only shortcut collapses when looking up at the cap.
+    let r = [f[1] * 0 - f[2] * 1, f[2] * 0 - f[0] * 0, f[0] * 1 - f[1] * 0];
+    let rl = Math.hypot(r[0], r[1], r[2]);
+    if (rl < 1e-6) { r = [1, 0, 0]; rl = 1; }
+    r = [r[0] / rl, r[1] / rl, r[2] / rl];
+    const u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+    const v = identity();
+    v[0] = r[0]; v[4] = r[1]; v[8] = r[2];
+    v[1] = u[0]; v[5] = u[1]; v[9] = u[2];
+    v[2] = -f[0]; v[6] = -f[1]; v[10] = -f[2];
+    v[12] = -(r[0] * eye[0] + r[1] * eye[1] + r[2] * eye[2]);
+    v[13] = -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]);
+    v[14] = (f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2]);
+    return v;
+  }
+  const lerp = (a, b, p) => a + (b - a) * p;
+  const lerp3 = (a, b, p) => [lerp(a[0], b[0], p), lerp(a[1], b[1], p), lerp(a[2], b[2], p)];
+  const easeInOut = p => p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+
+  window.__SHOT_SPAN__ = null;
 
   drawScene = () => {
     gl.viewport(0, 0, 1080, 1920);
@@ -204,113 +334,117 @@ if (gl) {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    const t = state.t;
-    const bob = Math.sin(t * 2.1) * 0.08;
-    const bm = xform(0, state.camY + bob, state.camZ, state.rotX, state.rotY + t * 0.9, Math.sin(t * 0.7) * 0.08, 1.05, 1.05, 1.05);
-    drawMesh(bottle, bm, [0.24, 0.07, 0.03], [1.0, 0.48, 0.18], 0.96);
-    drawMesh(cap, bm, [0.95, 0.25, 0.12], [1.0, 0.82, 0.4], 1.0);
+    const t = window.__3D_STATE__.t;
+    const spans = window.__SHOT_SPAN__;
+    if (!spans || !spans.length) return;
+    let idx = 0;
+    for (let i = 0; i < spans.length; i++) if (t >= spans[i].start) idx = i;
+    const span = spans[idx];
+    const shot = SHOTS[Math.min(idx, SHOTS.length - 1)];
+    const p = Math.min(1, Math.max(0, (t - span.start) / Math.max(0.0001, span.end - span.start)));
+    const e = easeInOut(p);
 
-    // Orbiting 3D ingredient spheres (citrus, spice, caramel, fizz)
-    const cols = [[1.0, 0.52, 0.14], [0.96, 0.74, 0.22], [0.65, 0.92, 0.35], [0.85, 0.94, 1.0]];
-    for (let i = 0; i < 10; i++) {
-      const a = t * 1.4 + i * 0.628;
-      const rad = (1.15 + (i % 3) * 0.35) * state.spread;
-      const x = Math.cos(a) * rad;
-      const z = state.camZ + Math.sin(a) * rad;
-      const y = state.camY - 0.9 + ((i * 0.37 + t * 0.55) % 2.6);
-      const s = i % 2 === 0 ? 0.14 : 0.085;
-      drawMesh(orb, xform(x, y, z, a, a * 0.7, 0, s, s, s), cols[i % cols.length], [1.0, 0.85, 0.6], 0.92);
+    let eye = lerp3(shot.from.pos, shot.to.pos, e);
+    const tgt = lerp3(shot.from.tgt, shot.to.tgt, e);
+    if (shot.orbit) {
+      const a = e * shot.orbit;
+      const dx = eye[0] - tgt[0], dz = eye[2] - tgt[2];
+      eye = [tgt[0] + dx * Math.cos(a) - dz * Math.sin(a), eye[1], tgt[2] + dx * Math.sin(a) + dz * Math.cos(a)];
     }
+    if (shot.dutch) {
+      const d = shot.dutch * Math.sin(p * Math.PI);
+      eye = [eye[0] + d * 0.6, eye[1] + d * 0.25, eye[2]];
+    }
+
+    gl.uniformMatrix4fv(uProj, false, perspective(shot.fov, 1080 / 1920, 0.1, 60));
+    const V = lookAt(eye, tgt);
+    const put = (mesh, model, col, rim, alpha, spec) => drawMesh(mesh, mul(V, model), col, rim, alpha, spec);
+
+    const bob = Math.sin(t * 2.1) * 0.05;
+    if (shot.hero === 'jar') {
+      put(jarMesh, xform(0, -0.15 + bob * 0.5, 0, 0, Math.sin(t * 0.5) * 0.12, 0, 0.98, 0.98, 0.98),
+          [0.55, 0.72, 0.85], [0.9, 0.97, 1.0], 0.30, 1.0);
+      put(bottleMesh, xform(0, -0.15 + bob * 0.5, 0, 0, Math.sin(t * 0.5) * 0.12, 0, 0.62, 0.62, 0.62),
+          [0.24, 0.07, 0.03], [1.0, 0.48, 0.18], 0.55, 0.6);
+    } else if (shot.focusCap) {
+      const m = xform(0, -0.35 + bob * 0.3, 0, 0, Math.sin(t * 0.4) * 0.08, 0, 1.55, 1.55, 1.55);
+      put(bottleMesh, m, [0.24, 0.07, 0.03], [1.0, 0.48, 0.18], 0.97, 0.8);
+      put(capMesh, m, [0.95, 0.25, 0.12], [1.0, 0.82, 0.4], 1.0, 0.9);
+    } else {
+      const spin = shot.orbit ? 0.25 : (0.55 + Math.sin(t * 0.9) * 0.35);
+      const m = xform(0, -0.25 + bob, 0, 0.05, spin, Math.sin(t * 0.6) * 0.05, 1.05, 1.05, 1.05);
+      put(bottleMesh, m, [0.24, 0.07, 0.03], [1.0, 0.48, 0.18], 0.96, 0.7);
+      put(capMesh, m, [0.95, 0.25, 0.12], [1.0, 0.82, 0.4], 1.0, 0.9);
+    }
+
+    for (const o of (shot.props ? shot.props(p, t) : [])) put(o.mesh, o.m, o.col, o.rim, o.alpha, o.spec);
   };
 }
 
+/* ---------- timeline ---------- */
 const tl = gsap.timeline({ paused: true });
 const frameAt = f => f / 30;
 const cards = [...document.querySelectorAll('.beat')];
-const seen = new Set();
-
-// Beat visibility is derived from time, never from accumulated timeline state:
-// a scrubber (seek) must land on exactly the same frame as a forward play.
 const cueWindows = [];
 const addCue = (id, frame) => {
   const c = ep.cues.find(x => x.id === id);
   const el = cards.find(card => card.dataset.beat === c?.beat);
   if (!el) return;
-  cueWindows.push({ at: frameAt(frame), el, idx: cueWindows.length });
+  cueWindows.push({ at: frameAt(frame), el, beat: c.beat });
 };
+
+const CARD_PLACEMENT = { b001: 'lower', b002: 'upper', b003: 'upper', b004: 'lower', b005: 'upper' };
+
+function refreshSpans(total) {
+  window.__SHOT_SPAN__ = cueWindows.map((w, i) => ({
+    start: w.at,
+    end: cueWindows[i + 1] ? cueWindows[i + 1].at : total,
+  }));
+}
 
 function syncBeats(t) {
   let current = null;
   for (const w of cueWindows) if (t >= w.at) current = w;
   for (const w of cueWindows) {
     const on = w === current;
+    w.el.classList.toggle('lower', CARD_PLACEMENT[w.beat] === 'lower');
+    w.el.classList.toggle('upper', CARD_PLACEMENT[w.beat] === 'upper');
     w.el.style.opacity = on ? '1' : '0';
-    w.el.style.transform = on ? 'translateY(0px)' : 'translateY(36px)';
+    w.el.style.transform = on ? 'translateY(0px)' : 'translateY(34px)';
   }
   if (current) {
-    const local = Math.min(1, (t - current.at) / 0.42);
-    const eased = 1 - Math.pow(1 - local, 3);
-    current.el.style.transform = `translateY(${(1 - eased) * 36}px)`;
-    const k = current.idx;
-    const s = window.__3D_STATE__;
-    const ease = 1 - Math.pow(1 - Math.min(1, (t - current.at) / 0.9), 2);
-    s.camZ = -6.2 + ((-5.2 - (k % 2) * 0.9) + 6.2) * ease;
-    s.camY = -0.35 + ((-0.45 + (k % 3) * 0.14) + 0.35) * ease;
-    s.rotY = (k * 1.15) * ease;
-    s.spread = 1 + ((0.9 + (k % 3) * 0.22) - 1) * ease;
+    const local = Math.min(1, (t - current.at) / 0.44);
+    current.el.style.transform = `translateY(${(1 - (1 - Math.pow(1 - local, 3))) * 34}px)`;
   }
 }
 window.__SYNC_BEATS__ = syncBeats;
 
-// Caption text: one short line at a time, cut from the beat narration so it
-// never collides with the card typography above it.
 const capEl = document.getElementById('cap');
-// The card already prints on_screen_text and the narration in full. A caption
-// that repeats either one puts the same words on screen twice, so this style
-// shows no caption text at all: the cards are the reading layer.
-const capLines = [];
-function syncCaption(t) {
-  if (!capEl) return;
-  capEl.textContent = '';
-}
+function syncCaption() { if (capEl) capEl.textContent = ''; }
 window.__SYNC_CAPTION__ = syncCaption;
-// A seek-driven recorder advances the timeline and reads the DOM; it never
-// calls our render helpers. onUpdate keeps state, cards and the WebGL frame in
-// step, so every recorded frame matches the timestamp it was taken at.
-// Cards and state are cheap DOM work and must happen on every seek. The WebGL
-// draw is NOT called here: the renderer drives it per frame, and calling it on
-// every tween tick inside onUpdate locks the tab up.
+
+window.__3D_STATE__ = { t: 0 };
 tl.eventCallback('onUpdate', () => {
   window.__3D_STATE__.t = tl.time();
   syncBeats(tl.time());
-  if (typeof window.__3D_DRAW_HOOK__ === 'function') window.__3D_DRAW_HOOK__(tl.time());
 });
+window.__3D_RENDER__ = () => { syncBeats(tl.time()); syncCaption(); drawScene(); };
 
 __UMP_TIMELINE__
-const totalDur = Number(document.getElementById('stage').dataset.duration) || 24;
+const totalDur = Number(document.getElementById('stage').dataset.duration) || 22.7;
+refreshSpans(totalDur);
 tl.to('.rail', { scaleX: 1, duration: totalDur, ease: 'none' }, 0);
-tl.to(window.__3D_STATE__, { t: totalDur, duration: totalDur, ease: 'none' }, 0);
-window.__3D_RENDER__ = () => { syncBeats(tl.time()); syncCaption(tl.time()); drawScene(); };
-// A single throttled draw per animation frame: many seeks in one tick collapse
-// into one paint instead of hundreds.
-let __drawQueued = false;
-window.__3D_DRAW_HOOK__ = () => {
-  if (__drawQueued) return;
-  __drawQueued = true;
-  requestAnimationFrame(() => { __drawQueued = false; drawScene(); });
-};
-// The recorder prefers window.__player, then window.__hf.seek, then
-// timelines[key].seek(). A bare GSAP seek does not fire onUpdate in this
-// version, so the beat cards stayed blank in every recorded frame. Exposing a
-// player whose renderSeek paints synchronously is what the capture loop calls.
+
+// The capture loop calls __player.renderSeek; a bare GSAP seek does not fire
+// onUpdate in this version, so the sync and the WebGL draw happen here.
 window.__player = {
   renderSeek(t) {
-    const time = Math.max(0, Number(t) || 0);
+    const time = Math.max(0, Math.min(totalDur, Number(t) || 0));
     tl.pause();
     tl.time(time, false);
     window.__3D_STATE__.t = time;
     syncBeats(time);
-    syncCaption(time);
+    syncCaption();
     drawScene();
     gsap.ticker.tick();
   },
@@ -319,6 +453,13 @@ window.__player = {
   get duration() { return tl.duration(); },
 };
 window.__timelines = { root: tl };
+// Debug probe: project a world point through the current shot camera.
+window.__probePoint = (t, pt) => {
+  const spans = window.__SHOT_SPAN__; if (!spans) return null;
+  let idx = 0; for (let i = 0; i < spans.length; i++) if (t >= spans[i].start) idx = i;
+  return { idx, span: spans[idx] };
+};
+refreshSpans(totalDur);
 drawScene();
 </script>
 </body>
