@@ -2,6 +2,28 @@
 
 Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) dan [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [1.6.0] - 2026-11-23
+
+### Added
+- Stage `storyboard` di antara `naskah_approved` dan `style_frame`. Operator menyusun naskah dulu, lalu mengirim gambar storyboard (dibuat di ChatGPT atau alat lain) lewat aksi `attach_storyboard`; frame dan video diturunkan dari gambar itu. Storyboard opsional: tanpa gambar, jalur lama tetap berjalan.
+- Aksi `ump_job` `attach_storyboard` dengan validasi lampiran gambar dari runtime cache (regular file, milik user, `O_NOFOLLOW`, batas 20 MiB).
+- `scripts/record_frames.mjs`: perekam frame deterministik untuk preset WebGL. Seek → tunggu GPU → screenshot → encode. Dipakai karena HyperFrames di mesin ini tidak bisa merekam WebGL dengan benar (`BeginFrame did not run`, jatuh ke mode screenshot yang menangkap sebelum canvas selesai).
+- Test `tests/test_storyboard.py`: urutan stage, gerbang frame, dan approval kalimat biasa.
+
+### Changed
+- Approval di chat tidak lagi memerlukan `UMP APPROVE <job> <rev> <stage> <artifact>`. Kalimat eksplisit — "setuju", "ya setuju", "lanjut", "gas", "sip", "mantap", "oke" — menyetujui stage yang sedang menunggu. Bentuk perintah tetap diterima untuk skrip, tetapi tidak pernah diminta ke operator.
+- Permintaan perubahan ("ganti", "revisi", "perbaiki", "kurang") dibaca sebagai penolakan, bukan approval.
+- Kata approval dicocokkan sebagai whole word: "pas" tidak lagi menyala di dalam "napas".
+
+### Fixed
+- `window.__hf` sekarang diekspos preset WebGL (`duration` + `seek`), sehingga recorder melakukan seek alih-alih merekam frame nol berulang kali.
+- `refreshSpans` dipanggil sebelum draw pertama; sebelumnya `window.__SHOT_SPAN__` tetap `null` dan `drawScene` keluar lebih awal, jadi seluruh video memutar satu scene statis.
+- Seek menunggu GPU selesai (`gl.readPixels` + `gl.finish`) agar frame hasil tangkapan cocok dengan timestamp-nya.
+- `worker.py` jalur mux menghormati `draws_captions`; sebelumnya subtitle ASS selalu dibakar meskipun preset menggambar caption sendiri, sehingga teks muncul dua kali.
+- Kartu beat menjadi satu-satunya lapisan teks di preset `webgl-3d-stage`.
+
 ## [1.5.0] - 2026-11-22
 
 ### Added
