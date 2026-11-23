@@ -445,7 +445,13 @@ window.__player = {
     window.__3D_STATE__.t = time;
     syncBeats(time);
     syncCaption();
+    // Draw twice with a forced context flush: the screenshot capture grabs the
+    // canvas before the next animation frame, and a single deferred draw left
+    // every recorded frame showing the previous shot.
     drawScene();
+    if (gl) gl.finish();
+    drawScene();
+    if (gl) gl.finish();
     gsap.ticker.tick();
   },
   seek(t) { window.__player.renderSeek(t); },
