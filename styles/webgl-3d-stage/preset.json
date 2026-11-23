@@ -49,5 +49,6 @@
       "url": "docs/ultra/specs/2026-11-22-ump-pipeline-repair-design.md"
     }
   ],
-  "draws_captions": true
+  "draws_captions": true,
+  "renderer": "webgl"
 }

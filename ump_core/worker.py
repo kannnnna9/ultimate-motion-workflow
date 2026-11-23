@@ -409,8 +409,48 @@ def _render(store, run, directory, command):
     seconds = float(probe(vo)['format']['duration'])
     if not 0 < seconds <= 180 or max(w['end_ms'] for w in captions['words']) > (seconds + .35) * 1000:
         raise DomainError('INVALID_AUDIO_TIMING', 'word timings exceed recording duration')
-    hyper(['render', '--quality', 'draft' if target == 'preview' else 'delivery', '--workers', '1', '-o', str(directory / 'frames.mp4')])
+    if _records_own_frames(brand):
+        _record_frames(directory, project, command)
+    else:
+        hyper(['render', '--quality', 'draft' if target == 'preview' else 'delivery', '--workers', '1', '-o', str(directory / 'frames.mp4')])
     return _mux(directory, episode, brand, cues, asset_root, target, command)
+
+
+def _records_own_frames(brand):
+    """True when the style must be captured by our recorder, not HyperFrames.
+
+    HyperFrames falls back to screenshot capture on software GL ("BeginFrame did
+    not run") and grabs the canvas before it settles, so a preset that renders
+    per-frame from an explicit seek comes out as one frozen scene. A preset marks
+    itself `renderer: "webgl"` to opt into the deterministic recorder.
+    """
+    try:
+        preset = json.loads((ROOT / 'styles' / str(brand.get('style_id')) / 'preset.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return False
+    return preset.get('renderer') == 'webgl'
+
+
+def _record_frames(directory, project, command):
+    """Capture the project frame by frame with record_frames.mjs, then encode.
+
+    The recorder writes PNG frames; encoding happens here so the rest of the
+    pipeline still receives exactly one frames.mp4 like the HyperFrames path.
+    """
+    fps = 30
+    raw = directory / 'framesraw'
+    node = ['node', str(ROOT / 'scripts' / 'record_frames.mjs'),
+            str(project), str(directory / 'frames.mp4'), str(fps)]
+    # The recorder owns framesraw and clears it itself, so no pre-clean here:
+    # doing both made the existence check race the capture on a rerun.
+    command(node, project)
+    if not raw.is_dir() or not any(raw.iterdir()):
+        raise DomainError('RENDER_FAILED', 'recorder produced no frames')
+    command(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-framerate', str(fps),
+             '-i', str(raw / 'f%05d.png'), '-c:v', 'libx264', '-profile:v', 'high',
+             '-pix_fmt', 'yuv420p', '-crf', '18', '-threads', '2', str(directory / 'frames.mp4')], project)
+    if not (directory / 'frames.mp4').is_file():
+        raise DomainError('RENDER_FAILED', 'frame encode produced no video')
 
 
 def _document(store, run, directory):

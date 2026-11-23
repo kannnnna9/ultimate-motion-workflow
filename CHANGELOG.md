@@ -4,6 +4,15 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-11-23
+
+### Fixed
+- `ump_render` sekarang merekam preset WebGL dengan `scripts/record_frames.mjs`, bukan HyperFrames. Preset menandai dirinya `renderer: "webgl"` dan `ump_core/worker.py` memilih jalur itu, lalu meng-encode PNG hasil rekaman menjadi `frames.mp4` biasa sehingga sisa pipeline (mux audio, cutoff end card, artifact) tidak berubah. Sebelumnya satu-satunya cara mendapat video WebGL yang benar adalah menjalankan recorder manual di luar plugin.
+- Rekaman tidak lagi membersihkan `framesraw` lebih dulu: recorder yang memilikinya, dan pembersihan ganda membuat pengecekan hasil balapan dengan proses capture saat run diulang.
+
+### Notes
+- `edge-tts` perlu >= 7.3.1. Versi 7.2.7 mengirim `Sec-MS-GEC` yang sudah kedaluwarsa dan Edge TTS membalas 403.
+
 ## [1.6.0] - 2026-11-23
 
 ### Added
