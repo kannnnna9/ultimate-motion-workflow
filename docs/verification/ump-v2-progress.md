@@ -153,4 +153,4 @@ Result: exit 0; 171 tests in 5.058s; `OK (skipped=1)`. The only skip is the brow
 
 ## Next
 
-Task 4 implementation and security review are committed as `42564ed`; the file-URL read was reproduced, closed, and regression-tested. Task 5 skill, source-adoption map, and evidence review are verified; commit those documentation changes, then record the final closeout commit and deliver the two MP4s with their source ZIPs.
+M1 Tasks 1–5 are complete on `feat/ump-v2.0`: renderer/security implementation `42564ed`; adaptive skill, adoption map, and evidence commit `d2a6325`. The 227-test suite and environment gate passed; the single pre-existing NumPy-dependent pixel test remains skipped. No merge, push, release, or production deployment was performed. The two verified MP4s and their source ZIPs are ready for delivery.
