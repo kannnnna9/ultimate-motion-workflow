@@ -13,7 +13,7 @@
 ## Checklist
 
 - [x] M0 — baseline, backups, isolated branch/data, VM profile, and sandbox/render probe.
-- [ ] M1 — custom composition creative core; write and commit focused M1 task plan before code.
+- [ ] M1 — custom-composition creative core; focused plan committed; implementation not started.
 - [ ] M2 — minimal reusable assets and meaningful articulated motion.
 - [ ] M3 — optional audio, WhisperX timing, and independent subtitles.
 - [ ] M4 — evidence-based creative QA, repair, revision locks, and resource validation.
@@ -81,6 +81,14 @@ Result: exit 0; 171 tests in 5.058s; `OK (skipped=1)`. The only skip is the brow
 - Evidence lives under `~/.hermes/cache/scratch/ump-v2-isolation-probe/`; not production data.
 - Open before M1 enables arbitrary compositions: implement and test per-job total storage policy (prefer streaming capture to avoid raw PNG accumulation), verify cgroup limit enforcement, and make the sandbox fail closed. No production composition code has been enabled or deployed.
 
+## M1 — Planning and sandbox preflight
+
+- Read the operator-supplied public ChatGPT share. Its visible copy contains the operator’s prompts and processing-time placeholders, but not the assistant replies. It corroborates web-rendered, mobile-first vertical work, open-ended creative genres, the no-Blender constraint, flexible safe-zone/subtitle placement, and deferral of series continuity; the approved blueprint remains the complete design authority.
+- Re-read the pinned reference reports and verified local Git objects for Huashu (`a97c45018d46e950d56d61981138e08f4e092909`, ref `refs/research/a97c450`), Reanimate (`3f7a55a2986a84ca2173e86ee9127eefe31d046d`, ref `refs/research/pinned`), Anidoodle (`4ae27d2c281fcfd01bce87ab13dc5ad4df81a795`), LottieFiles (`d77a9fc8cb371cab1ba5420df5bfd232cd14c9bb`), and MG Styles 15 (`8fab7eb49cc60590c518d1a932dfff753697fce7`). Read selected pinned source blobs, not only the existing audit summaries. Huashu/Reanimate license is MIT; Anidoodle software is Apache-2.0 with separate asset licenses; LottieFiles/MG Styles 15/Bang Motion are MIT, with third-party assets still needing per-file rights checks. No upstream demo media or code was added by this audit. The Bang Motion scratch checkout path is absent; its reference files remain vendored in the repository.
+- Live resource check: 2 CPUs; about 5.1 GiB available memory; root has 1.4 GiB free (98% used); `/dev/shm` is 3.8 GiB. Keep raw frames off disk and avoid large installs.
+- Resource-control probes: `CPUQuota=50%` yielded 1.0 CPU-second over a 2-second run. `MemoryMax` without `MemoryAccounting=yes` did not constrain a 256 MiB allocation; with explicit accounting, a 64 MiB unit was OOM-killed. A tmpfs-only write under `MemoryMax=64M` was OOM-killed after about 59 MiB written, then its file was removed. `TemporaryFileSystem=/tmp:rw,size=16M` failed with systemd status `226/NAMESPACE` (`Operation not supported`), so M1 will use a private `/dev/shm` run directory plus Landlock and the memory cgroup cap. Probe failure flags created here were reset; the user manager remains `degraded` due to existing XDG portal/notification units, but transient units ran successfully.
+- M1 task plan: `docs/ultra/plans/2026-11-25-ump-v2.0-m1-creative-core.md`. No M1 code or arbitrary scene execution has started.
+
 ## Next
 
-M1 starts with the pinned external-source audit and a focused M1 execution plan. The first implementation gate is the secure, storage-bounded render path; then add the custom composition route and prove it with two distinct original short videos. Do not install WhisperX or large models until disk and compatibility measurements justify it.
+Commit the focused M1 plan with this progress update, then begin T1 reference-manifest correction. Do not execute custom composition code until the new per-run sandbox has passed its integration tests.
