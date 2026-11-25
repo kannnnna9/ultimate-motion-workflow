@@ -13,7 +13,7 @@
 ## Checklist
 
 - [x] M0 — baseline, backups, isolated branch/data, VM profile, and sandbox/render probe.
-- [ ] M1 — custom-composition creative core; T1 source provenance/adoption map verified; sandbox implementation not started.
+- [ ] M1 — custom-composition creative core; T1 source provenance/adoption map and T2 fail-closed sandbox verified; T3–T5 pending.
 - [ ] M2 — minimal reusable assets and meaningful articulated motion.
 - [ ] M3 — optional audio, WhisperX timing, and independent subtitles.
 - [ ] M4 — evidence-based creative QA, repair, revision locks, and resource validation.
@@ -87,7 +87,7 @@ Result: exit 0; 171 tests in 5.058s; `OK (skipped=1)`. The only skip is the brow
 - Re-read the pinned reference reports and verified local Git objects for Huashu (`a97c45018d46e950d56d61981138e08f4e092909`, ref `refs/research/a97c450`), Reanimate (`3f7a55a2986a84ca2173e86ee9127eefe31d046d`, ref `refs/research/pinned`), Anidoodle (`4ae27d2c281fcfd01bce87ab13dc5ad4df81a795`), LottieFiles (`d77a9fc8cb371cab1ba5420df5bfd232cd14c9bb`), and MG Styles 15 (`8fab7eb49cc60590c518d1a932dfff753697fce7`). Read selected pinned source blobs, not only the existing audit summaries. Huashu/Reanimate license is MIT; Anidoodle software is Apache-2.0 with separate asset licenses; LottieFiles/MG Styles 15/Bang Motion are MIT, with third-party assets still needing per-file rights checks. No upstream demo media or code was added by this audit. The Bang Motion scratch checkout path is absent; its reference files remain vendored in the repository.
 - Live resource check: 2 CPUs; about 5.1 GiB available memory; root has 1.4 GiB free (98% used); `/dev/shm` is 3.8 GiB. Keep raw frames off disk and avoid large installs.
 - Resource-control probes: `CPUQuota=50%` yielded 1.0 CPU-second over a 2-second run. `MemoryMax` without `MemoryAccounting=yes` did not constrain a 256 MiB allocation; with explicit accounting, a 64 MiB unit was OOM-killed. A tmpfs-only write under `MemoryMax=64M` was OOM-killed after about 59 MiB written, then its file was removed. `TemporaryFileSystem=/tmp:rw,size=16M` failed with systemd status `226/NAMESPACE` (`Operation not supported`), so M1 will use a private `/dev/shm` run directory plus Landlock and the memory cgroup cap. Probe failure flags created here were reset; the user manager remains `degraded` due to existing XDG portal/notification units, but transient units ran successfully.
-- M1 task plan: `docs/ultra/plans/2026-11-25-ump-v2.0-m1-creative-core.md`. No M1 code or arbitrary scene execution has started.
+- M1 task plan: `docs/ultra/plans/2026-11-25-ump-v2.0-m1-creative-core.md`. The sandbox foundation is implemented and tested; no composition route or arbitrary scene execution is enabled yet.
 
 ## M1 Task 1 — References and adoption
 
@@ -98,6 +98,16 @@ Result: exit 0; 171 tests in 5.058s; `OK (skipped=1)`. The only skip is the brow
 - Created [`v2-adoption.md`](../research/ump/v2-adoption.md) with source file, technique, license boundary, planned UMP consumer, test, and evidence status. No upstream scene/demo media or new code/dependency was copied or executed.
 - Plan commits: `ede373d` (M1 plan), `0faf09f` (clarified absent Bang checkout and vendor material).
 
+## M1 Task 2 — Fail-closed sandbox
+
+- Added `ump_core/sandbox.py`: private per-run `/dev/shm/ump-v2/<uid>/<run_id>` workspaces, validated cleanup, one nonblocking global `flock`, systemd-run resource/network restrictions, a clean child environment, and Landlock ABI-4 allowlisting. The workspace is the only writable ordinary path; only `/dev/null` is additionally writable. `/proc` is not granted because the live same-UID probe showed `ProtectProc=ptraceable` alone does not hide same-UID command-line metadata. `/dev` and `/dev/shm` parent paths are execute-only; sibling tmpfs content cannot be read or listed.
+- Verified the transient-unit controls in `systemctl show`: `MemoryAccounting=yes`, `MemoryMax=2G`, `MemorySwapMax=0`, `CPUQuota=200%`, `TasksMax=64`, `IPAddressDeny=any`, `RestrictAddressFamilies=AF_UNIX`, `ProtectProc=ptraceable`, and `NoNewPrivileges=yes`.
+- Integration command: `UMP_SANDBOX_TESTS=1 PYTHONPATH=. python3 -W error::ResourceWarning -m unittest discover -s tests -p 'test_sandbox.py'`.
+- Result: exit 0; 14 tests in 3.473s; `OK`. Coverage includes allowed workspace writes and clean env, denied Hermes config and same-UID `/proc` reads, denied sibling tmpfs read/list/write and AF_INET sockets, binary stdout preservation, busy lock, symlink-safe cleanup, timeout stop with no child left and status 124 (including a mocked nonzero runner exit), and a 64 MiB tmpfs negative control whose systemd result is `oom-kill` after 32–64 MiB.
+- Baseline regression: `PYTHONPATH=. UMP_DATA_ROOT=~/.hermes/ump-v2 python3 -W error::ResourceWarning -m unittest discover -s tests -p 'test_*.py'` → exit 0; 185 tests; `OK (skipped=15)`.
+- Post-test cleanup verification: no `ump-v2-*` transient user units remain; `/dev/shm/ump-v2/1002` contains only the global `.render.lock`, with no per-run workspace or OOM test file left behind.
+- The user-manager feature probe accepted all configured properties. `start_isolated` does not execute the requested child unless its wrapper successfully applies Landlock ABI 4; unavailable controls fail closed. No browser capture is claimed here; Chromium integration remains Task 4 evidence.
+
 ## Next
 
-Commit the Task 1 manifest/adoption/progress update, then begin the sandbox’s failing integration tests. Do not execute custom composition code until the per-run sandbox has passed.
+Task 1 is complete in `02bd36e`; Task 2 sandbox tests pass. Proceed to Task 3’s revision-owned custom composition and mode-aware approval path. Do not execute an arbitrary composition until Task 4 connects it to the sandboxed renderer.
