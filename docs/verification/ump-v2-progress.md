@@ -13,7 +13,7 @@
 ## Checklist
 
 - [x] M0 — baseline, backups, isolated branch/data, VM profile, and sandbox/render probe.
-- [ ] M1 — custom-composition creative core; focused plan committed; implementation not started.
+- [ ] M1 — custom-composition creative core; T1 source provenance/adoption map verified; sandbox implementation not started.
 - [ ] M2 — minimal reusable assets and meaningful articulated motion.
 - [ ] M3 — optional audio, WhisperX timing, and independent subtitles.
 - [ ] M4 — evidence-based creative QA, repair, revision locks, and resource validation.
@@ -89,6 +89,15 @@ Result: exit 0; 171 tests in 5.058s; `OK (skipped=1)`. The only skip is the brow
 - Resource-control probes: `CPUQuota=50%` yielded 1.0 CPU-second over a 2-second run. `MemoryMax` without `MemoryAccounting=yes` did not constrain a 256 MiB allocation; with explicit accounting, a 64 MiB unit was OOM-killed. A tmpfs-only write under `MemoryMax=64M` was OOM-killed after about 59 MiB written, then its file was removed. `TemporaryFileSystem=/tmp:rw,size=16M` failed with systemd status `226/NAMESPACE` (`Operation not supported`), so M1 will use a private `/dev/shm` run directory plus Landlock and the memory cgroup cap. Probe failure flags created here were reset; the user manager remains `degraded` due to existing XDG portal/notification units, but transient units ran successfully.
 - M1 task plan: `docs/ultra/plans/2026-11-25-ump-v2.0-m1-creative-core.md`. No M1 code or arbitrary scene execution has started.
 
+## M1 Task 1 — References and adoption
+
+- Reconfirmed all five available Git source pins and their exact local refs: Anidoodle `4ae27d2c281fcfd01bce87ab13dc5ad4df81a795` → `refs/heads/main`; Huashu `a97c45018d46e950d56d61981138e08f4e092909` → `refs/research/a97c450`; LottieFiles `d77a9fc8cb371cab1ba5420df5bfd232cd14c9bb` → `refs/heads/main`; MG Styles 15 `8fab7eb49cc60590c518d1a932dfff753697fce7` → `refs/heads/main`; Reanimate `3f7a55a2986a84ca2173e86ee9127eefe31d046d` → `refs/research/pinned`. Every `cat-file` and `rev-parse` assertion passed.
+- Verified license headers from the pinned `LICENSE` blobs: Anidoodle Apache-2.0; Huashu, LottieFiles, MG Styles 15, and Reanimate MIT; Bang Motion’s vendored license MIT. Halftone Dossier’s `STYLE.md` explicitly records CC-BY-NC-4.0; it is excluded from the M1 artwork.
+- Corrected the empty Huashu/Reanimate SHA and ref fields. The Bang Motion cache path is absent, but six selected reference/license files remain in `vendor/bang-motion/`; manifest now records `checkout_status=absent` and `vendored_material=vendor/bang-motion` while preserving historical pin/path.
+- `python3 -c ...` manifest assertions passed: `manifest pins and materialization verified`. `python3 scripts/cleanup_research.py --manifest docs/verification/research-manifest.json` was dry-run only: `eligible=[]`, Bang rejected as `not_git_root`, and `DRY RUN: no checkout changed`. All 11 relative links in `v2-adoption.md` resolve locally; `git diff --check` passes.
+- Created [`v2-adoption.md`](../research/ump/v2-adoption.md) with source file, technique, license boundary, planned UMP consumer, test, and evidence status. No upstream scene/demo media or new code/dependency was copied or executed.
+- Plan commits: `ede373d` (M1 plan), `0faf09f` (clarified absent Bang checkout and vendor material).
+
 ## Next
 
-Commit the focused M1 plan with this progress update, then begin T1 reference-manifest correction. Do not execute custom composition code until the new per-run sandbox has passed its integration tests.
+Commit the Task 1 manifest/adoption/progress update, then begin the sandbox’s failing integration tests. Do not execute custom composition code until the per-run sandbox has passed.

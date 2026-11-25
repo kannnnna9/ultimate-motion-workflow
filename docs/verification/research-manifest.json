@@ -11,8 +11,8 @@
       "source_id": "huashu",
       "path": "/home/agentuser/.cache/ump-research/huashu",
       "remote": "https://github.com/alchaincyf/huashu-art-motion.git",
-      "sha": "",
-      "ref": "refs/heads/master"
+      "sha": "a97c45018d46e950d56d61981138e08f4e092909",
+      "ref": "refs/research/a97c450"
     },
     {
       "source_id": "lottiefiles",
@@ -32,15 +32,17 @@
       "source_id": "reanimate",
       "path": "/home/agentuser/.cache/ump-research/reanimate",
       "remote": "https://github.com/NiazMorshed2007/reanimate.git",
-      "sha": "",
-      "ref": "refs/heads/master"
+      "sha": "3f7a55a2986a84ca2173e86ee9127eefe31d046d",
+      "ref": "refs/research/pinned"
     },
     {
       "source_id": "bang-motion",
       "path": "/home/agentuser/.hermes/cache/scratch/bang-motion",
       "remote": "https://github.com/bangtutorial/bang-motion.git",
       "sha": "c1aa65e921c970d858705fcb4a53a8294d1a4131",
-      "ref": "refs/heads/main"
+      "ref": "refs/heads/main",
+      "checkout_status": "absent",
+      "vendored_material": "vendor/bang-motion"
     }
   ]
 }
