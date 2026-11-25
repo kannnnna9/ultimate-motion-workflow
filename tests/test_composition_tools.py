@@ -84,5 +84,41 @@ class CompositionToolTests(unittest.TestCase):
         submit.assert_called_once_with(self.store, custom["job_id"], custom["rev"], "preview")
 
 
+class MotionPipelineSkillContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.skill = (Path(__file__).resolve().parents[1] / "skills" / "motion-pipeline" / "SKILL.md").read_text(encoding="utf-8")
+        cls.lower = cls.skill.lower()
+
+    def test_skill_is_role_adaptive_and_custom_composition_is_default(self):
+        for role in ("director", "art director", "storyboard artist", "illustrator", "animator",
+                     "cinematographer", "sound designer", "editor", "critic"):
+            with self.subTest(role=role):
+                self.assertIn(role, self.lower)
+        for mode in ("autonomous", "collaborative", "directed"):
+            with self.subTest(mode=mode):
+                self.assertIn(mode, self.lower)
+        self.assertIn("custom html", self.lower)
+        self.assertIn("default", self.lower)
+        self.assertIn("no blender", self.lower)
+        self.assertIn("adr-010", self.lower)
+
+    def test_skill_keeps_optional_media_approval_sandbox_and_provenance_rules(self):
+        for token in ("tanpa riset", "tanpa vo", "tanpa subtitle", "storyboard", "skip"):
+            with self.subTest(token=token):
+                self.assertIn(token, self.lower)
+        for token in ("revision", "artifact_id", "sandbox", "network", "source.zip", "lisensi", "provenance"):
+            with self.subTest(token=token):
+                self.assertIn(token, self.lower)
+        self.assertIn("referensi selektif", self.lower)
+        self.assertIn("references", self.lower)
+
+    def test_skill_has_a_fresh_artifact_verification_gate(self):
+        self.assertIn("## verification", self.lower)
+        for token in ("ffprobe", "manifest.json", "normal speed", "contact sheet", "artifact ids"):
+            with self.subTest(token=token):
+                self.assertIn(token, self.lower)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,12 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 
 ## [Unreleased]
 
+### Added
+- UMP v2.0 M1 pada branch development: komposisi HTML per revision dan renderer offline yang seekable untuk MP4 vertikal; preview MP4, bundle source ber-manifest, dan halaman player menjadi artifact yang terikat run. Jalur preset v1 tetap kompatibel.
+
+### Security
+- Capture dijalankan tanpa akses jaringan dengan workspace sementara dan allowlist `file:` pada staged composition; akses ke file runtime di luar stage ditolak.
+
 ## [1.6.2] - 2026-11-23
 
 ### Fixed
