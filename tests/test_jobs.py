@@ -248,6 +248,205 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(self.store.get(job)["rev"], 1)
         self.assertFalse((self.root / "jobs" / job / "revisions" / "2").exists())
 
+    def test_create_persists_mode_and_requirements(self):
+        with self.assertRaises(DomainError) as raised:
+            self.store.create("bad mode", mode="creative")
+        self.assertEqual(raised.exception.code, "INVALID_MODE")
+
+        default_job = self.store.create("default mode")
+        self.assertEqual(default_job["mode"], "collaborative")
+
+        requirements = {"checkpoints": [], "hard": {"subtitle": False}}
+        job = self.store.create("directed mode", mode="directed", requirements=requirements)
+        self.assertEqual(job["mode"], "directed")
+        self.assertEqual(job["requirements"], requirements)
+        reopened = JobStore(self.root).get(job["job_id"])
+        self.assertEqual(reopened["mode"], "directed")
+        self.assertEqual(reopened["requirements"], requirements)
+
+    def test_autonomous_composition_proceeds_without_operator_approval(self):
+        job = self.store.create("autonomous render", mode="autonomous")
+        custom = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>scene</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        })
+        run = self.store.claim(custom["job_id"], custom["rev"], "preview")
+        (self.root / "runs" / run["run_id"] / "preview.mp4").write_bytes(b"preview")
+        self.store.finish(run["run_id"], "preview.mp4", None)
+        self.assertEqual(self.store.stage_of(custom["job_id"]), "final_ready")
+        final = self.store.claim(custom["job_id"], custom["rev"], "final")
+        self.assertEqual(final["target"], "final")
+        with self.store._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM approvals WHERE job_id=?", (custom["job_id"],)).fetchone()[0], 0)
+
+    def test_directed_defaults_to_preview_checkpoint(self):
+        job = self.store.create("directed default checkpoint", mode="directed")
+        custom = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>scene</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        })
+        run = self.store.claim(custom["job_id"], custom["rev"], "preview")
+        (self.root / "runs" / run["run_id"] / "preview.mp4").write_bytes(b"preview")
+        self.store.finish(run["run_id"], "preview.mp4", None)
+        self.assertEqual(self.store.stage_of(custom["job_id"]), "preview")
+        with self.assertRaises(DomainError) as raised:
+            self.store.claim(custom["job_id"], custom["rev"], "final")
+        self.assertEqual(raised.exception.code, "APPROVAL_REQUIRED")
+
+    def test_directed_empty_checkpoints_skip_preview_approval(self):
+        job = self.store.create("directed without approvals", mode="directed", requirements={"checkpoints": []})
+        custom = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>scene</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        })
+        run = self.store.claim(custom["job_id"], custom["rev"], "preview")
+        (self.root / "runs" / run["run_id"] / "preview.mp4").write_bytes(b"preview")
+        self.store.finish(run["run_id"], "preview.mp4", None)
+        self.assertEqual(self.store.stage_of(custom["job_id"]), "final_ready")
+        final = self.store.claim(custom["job_id"], custom["rev"], "final")
+        self.assertEqual(final["target"], "final")
+        with self.store._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM approvals WHERE job_id=?", (custom["job_id"],)).fetchone()[0], 0)
+
+    def test_collaborative_composition_requires_preview_approval_before_final(self):
+        job = self.store.create("collaborative render", mode="collaborative")
+        custom = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>scene</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        })
+        run = self.store.claim(custom["job_id"], custom["rev"], "preview")
+        (self.root / "runs" / run["run_id"] / "preview.mp4").write_bytes(b"preview")
+        preview = self.store.finish(run["run_id"], "preview.mp4", None)["artifact"]
+        self.assertEqual(self.store.stage_of(custom["job_id"]), "preview")
+        with self.assertRaises(DomainError) as raised:
+            self.store.claim(custom["job_id"], custom["rev"], "final")
+        self.assertEqual(raised.exception.code, "APPROVAL_REQUIRED")
+
+        self.store.approve(custom["job_id"], custom["rev"], "preview", preview["id"],
+                           evidence={"message_id": "operator-preview", "chat_id": "test-chat"})
+        self.assertEqual(self.store.stage_of(custom["job_id"]), "final_ready")
+        final = self.store.claim(custom["job_id"], custom["rev"], "final")
+        self.assertEqual(final["target"], "final")
+
+    def test_custom_composition_can_start_preview_directly(self):
+        job = self.store.create("direct preview", mode="collaborative")
+        custom = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>scene</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        })
+        run = self.store.claim(custom["job_id"], custom["rev"], "preview")
+        self.assertEqual((run["target"], run["rev"]), ("preview", custom["rev"]))
+
+    def test_generic_revision_cannot_replace_composition_paths(self):
+        job = self.store.create("path ownership", mode="autonomous")
+        custom = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>safe</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        })
+        with self.assertRaises(DomainError) as raised:
+            self.store.revise(custom["job_id"], custom["rev"], {
+                "composition": {"html_path": "../../etc/passwd"},
+            })
+        self.assertEqual(raised.exception.code, "USE_WRITE_COMPOSITION")
+        self.assertEqual(self.store.get(job["job_id"])["rev"], custom["rev"])
+
+    def test_metadata_revision_preserves_composition_in_new_revision(self):
+        composition = {
+            "html": "<!doctype html><body>owned source</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        }
+        job = self.store.create("metadata revision", mode="autonomous")
+        custom = self.store.write_composition(job["job_id"], job["rev"], composition)
+        revised = self.store.revise(custom["job_id"], custom["rev"], {"brief": "updated brief"})
+        self.assertEqual((revised["rev"], revised["stage"]), (3, "composition_draft"))
+        revision_dir = self.root / "jobs" / job["job_id"] / "revisions" / "3"
+        self.assertEqual((revision_dir / "composition" / "index.html").read_text(encoding="utf-8"), composition["html"])
+        self.assertEqual(json.loads((revision_dir / "project.json").read_text(encoding="utf-8")), {
+            key: value for key, value in composition.items() if key != "html"
+        })
+
+    def test_custom_route_rejects_unsupported_directed_checkpoints(self):
+        job = self.store.create("unsupported checkpoint", mode="directed",
+                                requirements={"checkpoints": ["creative_direction", "preview"]})
+        with self.assertRaises(DomainError) as raised:
+            self.store.write_composition(job["job_id"], job["rev"], {
+                "html": "<!doctype html><body>scene</body>",
+                "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+                "audio_enabled": False, "subtitles_enabled": False,
+            })
+        self.assertEqual(raised.exception.code, "UNSUPPORTED_CHECKPOINT")
+        self.assertEqual(self.store.get(job["job_id"])["rev"], 1)
+        self.assertFalse((self.root / "jobs" / job["job_id"] / "revisions" / "2").exists())
+
+    def test_editing_composition_invalidates_old_preview_and_final_artifacts(self):
+        job = self.store.create("invalidate prior outputs", mode="collaborative")
+        composition = {
+            "html": "<!doctype html><body>first</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        }
+        custom = self.store.write_composition(job["job_id"], job["rev"], composition)
+        preview_run = self.store.claim(custom["job_id"], custom["rev"], "preview")
+        (self.root / "runs" / preview_run["run_id"] / "preview.mp4").write_bytes(b"preview-v1")
+        preview = self.store.finish(preview_run["run_id"], "preview.mp4", None)["artifact"]
+        self.store.approve(custom["job_id"], custom["rev"], "preview", preview["id"],
+                           evidence={"message_id": "approval-v1", "chat_id": "test-chat"})
+        final_run = self.store.claim(custom["job_id"], custom["rev"], "final")
+        (self.root / "runs" / final_run["run_id"] / "final.mp4").write_bytes(b"final-v1")
+        final = self.store.finish(final_run["run_id"], "final.mp4", None)["artifact"]
+
+        revised = self.store.write_composition(custom["job_id"], custom["rev"], {
+            **composition, "html": "<!doctype html><body>second</body>",
+        })
+        self.assertEqual((revised["rev"], revised["stage"]), (3, "composition_draft"))
+        old_outputs = {item["id"]: item for item in revised["artifacts"]}
+        self.assertEqual(old_outputs[preview["id"]]["rev"], 2)
+        self.assertEqual(old_outputs[final["id"]]["rev"], 2)
+        with self.assertRaises(DomainError) as raised:
+            self.store.claim(revised["job_id"], revised["rev"], "final")
+        self.assertEqual(raised.exception.code, "STAGE_ORDER")
+        with self.assertRaises(DomainError) as raised:
+            self.store.claim(revised["job_id"], custom["rev"], "final")
+        self.assertEqual(raised.exception.code, "STALE_REVISION")
+
+    def test_write_composition_creates_immutable_revision_snapshot(self):
+        composition = {
+            "html": "<!doctype html><title>one</title>",
+            "width": 1080,
+            "height": 1920,
+            "fps": 30,
+            "duration_frames": 30,
+            "audio_enabled": False,
+            "subtitles_enabled": False,
+        }
+        job = self.store.create("custom composition", mode="autonomous")
+        first = self.store.write_composition(job["job_id"], job["rev"], composition)
+        self.assertEqual((first["rev"], first["stage"]), (2, "composition_draft"))
+
+        first_dir = self.root / "jobs" / job["job_id"] / "revisions" / "2"
+        first_html = first_dir / "composition" / "index.html"
+        project = {key: value for key, value in composition.items() if key != "html"}
+        self.assertEqual(first_html.read_text(encoding="utf-8"), composition["html"])
+        self.assertEqual(json.loads((first_dir / "project.json").read_text(encoding="utf-8")), project)
+        snapshot = json.loads((first_dir / "input.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["mode"], "autonomous")
+        self.assertEqual(snapshot["composition"]["html_path"], "composition/index.html")
+        self.assertEqual(snapshot["composition"]["metadata"], project)
+
+        updated = {**composition, "html": "<!doctype html><title>two</title>"}
+        second = self.store.write_composition(job["job_id"], first["rev"], updated)
+        self.assertEqual((second["rev"], second["stage"]), (3, "composition_draft"))
+        self.assertEqual(first_html.read_text(encoding="utf-8"), composition["html"])
+        current_html = self.root / "jobs" / job["job_id"] / "revisions" / "3" / "composition" / "index.html"
+        self.assertEqual(current_html.read_text(encoding="utf-8"), updated["html"])
+
     def _artifact(self, job_id, rev, kind, name):
         path = self.root / "jobs" / job_id / "revisions" / str(rev) / name
         path.parent.mkdir(parents=True, exist_ok=True)

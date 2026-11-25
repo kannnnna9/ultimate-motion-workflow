@@ -13,7 +13,7 @@
 ## Checklist
 
 - [x] M0 — baseline, backups, isolated branch/data, VM profile, and sandbox/render probe.
-- [ ] M1 — custom-composition creative core; T1 source provenance/adoption map and T2 fail-closed sandbox verified; T3–T5 pending.
+- [ ] M1 — custom-composition creative core; T1–T3 source provenance, sandbox, and mode-aware composition route verified; T4–T5 pending.
 - [ ] M2 — minimal reusable assets and meaningful articulated motion.
 - [ ] M3 — optional audio, WhisperX timing, and independent subtitles.
 - [ ] M4 — evidence-based creative QA, repair, revision locks, and resource validation.
@@ -87,7 +87,7 @@ Result: exit 0; 171 tests in 5.058s; `OK (skipped=1)`. The only skip is the brow
 - Re-read the pinned reference reports and verified local Git objects for Huashu (`a97c45018d46e950d56d61981138e08f4e092909`, ref `refs/research/a97c450`), Reanimate (`3f7a55a2986a84ca2173e86ee9127eefe31d046d`, ref `refs/research/pinned`), Anidoodle (`4ae27d2c281fcfd01bce87ab13dc5ad4df81a795`), LottieFiles (`d77a9fc8cb371cab1ba5420df5bfd232cd14c9bb`), and MG Styles 15 (`8fab7eb49cc60590c518d1a932dfff753697fce7`). Read selected pinned source blobs, not only the existing audit summaries. Huashu/Reanimate license is MIT; Anidoodle software is Apache-2.0 with separate asset licenses; LottieFiles/MG Styles 15/Bang Motion are MIT, with third-party assets still needing per-file rights checks. No upstream demo media or code was added by this audit. The Bang Motion scratch checkout path is absent; its reference files remain vendored in the repository.
 - Live resource check: 2 CPUs; about 5.1 GiB available memory; root has 1.4 GiB free (98% used); `/dev/shm` is 3.8 GiB. Keep raw frames off disk and avoid large installs.
 - Resource-control probes: `CPUQuota=50%` yielded 1.0 CPU-second over a 2-second run. `MemoryMax` without `MemoryAccounting=yes` did not constrain a 256 MiB allocation; with explicit accounting, a 64 MiB unit was OOM-killed. A tmpfs-only write under `MemoryMax=64M` was OOM-killed after about 59 MiB written, then its file was removed. `TemporaryFileSystem=/tmp:rw,size=16M` failed with systemd status `226/NAMESPACE` (`Operation not supported`), so M1 will use a private `/dev/shm` run directory plus Landlock and the memory cgroup cap. Probe failure flags created here were reset; the user manager remains `degraded` due to existing XDG portal/notification units, but transient units ran successfully.
-- M1 task plan: `docs/ultra/plans/2026-11-25-ump-v2.0-m1-creative-core.md`. The sandbox foundation is implemented and tested; no composition route or arbitrary scene execution is enabled yet.
+- M1 task plan: `docs/ultra/plans/2026-11-25-ump-v2.0-m1-creative-core.md`. T2 sandbox and T3 composition route are implemented and tested; custom HTML execution is not connected until Task 4 replaces the worker’s legacy path.
 
 ## M1 Task 1 — References and adoption
 
@@ -108,6 +108,16 @@ Result: exit 0; 171 tests in 5.058s; `OK (skipped=1)`. The only skip is the brow
 - Post-test cleanup verification: no `ump-v2-*` transient user units remain; `/dev/shm/ump-v2/1002` contains only the global `.render.lock`, with no per-run workspace or OOM test file left behind.
 - The user-manager feature probe accepted all configured properties. `start_isolated` does not execute the requested child unless its wrapper successfully applies Landlock ABI 4; unavailable controls fail closed. No browser capture is claimed here; Chromium integration remains Task 4 evidence.
 
+## M1 Task 3 — Mode-aware custom composition
+
+- Added `ump_core/composition.py`: exact-shape input, UTF-8 HTML bounded to 1 MiB, pinned 1080×1920/30 FPS metadata, positive duration up to 1,800 frames, and silent/no-subtitle flags. Filesystem paths and unknown value fields are rejected by runtime validation and the tool schema.
+- Jobs persist `mode` and JSON `requirements` in the revision payload (64 KiB bound); modes are `autonomous`, `collaborative`, and `directed`. Custom compositions are revision-owned under `revisions/<rev>/composition/index.html` plus `project.json`. Metadata-only revisions copy those files and return to `composition_draft`; generic patches cannot replace composition paths.
+- Custom jobs reach preview directly. Collaborative and directed-default jobs require a real preview approval; directed `checkpoints: []` and autonomous jobs proceed to final after successful preview without synthetic approvals. Editing composition creates a new revision, making previous preview/final artifacts stale. Legacy jobs keep their existing routes and operator-message approval evidence.
+- Directed custom compositions currently support only the `preview` checkpoint. Other checkpoint names fail with `UNSUPPORTED_CHECKPOINT` rather than being silently ignored. The preview HTML is not executed until Task 4 supplies the isolated recorder.
+- `PYTHONPATH=. python3 -m unittest discover -s tests -p 'test_composition*.py'` → exit 0; 12 tests in 0.128s; `OK`.
+- `PYTHONPATH=. python3 -m unittest discover -s tests -p 'test_jobs.py'` → exit 0; 26 tests in 1.457s; `OK`.
+- Legacy approval verification: `test_approval_sentence.py` → 23 tests; `test_stage_gate.py` → 16 tests; both exit 0. No approval text or evidence was fabricated by the custom route.
+
 ## Next
 
-Task 1 is complete in `02bd36e`; Task 2 sandbox tests pass. Proceed to Task 3’s revision-owned custom composition and mode-aware approval path. Do not execute an arbitrary composition until Task 4 connects it to the sandboxed renderer.
+Task 1 is complete in `02bd36e`; Task 2 and Task 3 verification pass. Proceed to Task 4’s browser-to-FFmpeg renderer and two original clips. Do not execute an arbitrary composition until the sandboxed renderer is complete.

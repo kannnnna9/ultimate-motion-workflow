@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import secrets
+import shutil
 import sqlite3
 import threading
 from pathlib import Path
@@ -100,6 +101,38 @@ def stage_index(stage: str) -> int:
         return _STAGE_INDEX[stage]
     except KeyError as exc:
         raise DomainError("INVALID_STAGE", stage) from exc
+
+
+def _normalize_requirements(requirements):
+    if requirements is None:
+        return {}
+    if not isinstance(requirements, dict):
+        raise DomainError("INVALID_REQUIREMENTS", "expected an object")
+    try:
+        encoded = json.dumps(requirements, sort_keys=True, allow_nan=False)
+        if len(encoded.encode("utf-8")) > 65_536:
+            raise DomainError("INVALID_REQUIREMENTS", "object exceeds 64 KiB")
+        result = json.loads(encoded)
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise DomainError("INVALID_REQUIREMENTS", "requirements must be JSON") from exc
+    if "checkpoints" in result:
+        checkpoints = result["checkpoints"]
+        if (not isinstance(checkpoints, list)
+            or any(not isinstance(item, str) or not item for item in checkpoints)
+            or len(checkpoints) > 16 or len(set(checkpoints)) != len(checkpoints)):
+            raise DomainError("INVALID_REQUIREMENTS", "checkpoints must be unique non-empty strings")
+    return result
+
+
+def _preview_approval_required(payload):
+    mode = payload.get("mode", "collaborative")
+    if mode == "autonomous":
+        return False
+    if mode == "directed":
+        requirements = payload.get("requirements", {})
+        checkpoints = requirements.get("checkpoints", ["preview"]) if isinstance(requirements, dict) else ["preview"]
+        return "preview" in checkpoints
+    return True
 
 
 class JobStore:
@@ -204,20 +237,73 @@ class JobStore:
             raise DomainError("NOT_FOUND", "path")
         return p
 
-    def create(self, brief: str) -> dict:
+    def create(self, brief: str, *, mode="collaborative", requirements=None) -> dict:
         if not isinstance(brief, str) or not brief.strip():
             raise DomainError("INVALID_PAYLOAD", "brief")
+        if not isinstance(mode, str) or mode not in {"autonomous", "collaborative", "directed"}:
+            raise DomainError("INVALID_MODE", str(mode))
+        requirements = _normalize_requirements(requirements)
         job_id = secrets.token_urlsafe(12)
-        payload = {"brief": brief, "cues": {}}
+        payload = {"brief": brief, "cues": {}, "mode": mode, "requirements": requirements}
+        encoded = json.dumps(payload, sort_keys=True, allow_nan=False)
         rev_dir = self._job_dir(job_id) / "revisions" / "1"
         rev_dir.mkdir(parents=True)
-        (rev_dir / "input.json").write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        (rev_dir / "input.json").write_text(encoded, encoding="utf-8")
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("INSERT INTO jobs (job_id, brief, rev, status, error, payload, stage, origin) VALUES (?,?,?,?,?,?,?,?)",
-                       (job_id, brief, 1, "draft", None, json.dumps(payload), "intake", "generated"))
-            db.execute("INSERT INTO revisions VALUES (?,?,?)", (job_id, 1, json.dumps(payload)))
+                       (job_id, brief, 1, "draft", None, encoded, "intake", "generated"))
+            db.execute("INSERT INTO revisions VALUES (?,?,?)", (job_id, 1, encoded))
             db.commit()
+        return self.get(job_id)
+
+    def write_composition(self, job_id: str, rev: int, value: dict) -> dict:
+        from .composition import validate_composition
+
+        composition = validate_composition(value)
+        metadata = {key: item for key, item in composition.items() if key != "html"}
+        with self._lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._job(db, job_id)
+            self._check_rev(row, rev)
+            payload = json.loads(row["payload"])
+            has_composition = isinstance(payload.get("composition"), dict)
+            allowed = {"composition_draft", "preview", "final_ready"} if has_composition else {"intake"}
+            if row["stage"] not in allowed:
+                raise DomainError("STAGE_ORDER", "composition can only be written from intake or its own route")
+            requirements = payload.get("requirements", {})
+            checkpoints = requirements.get("checkpoints", []) if isinstance(requirements, dict) else []
+            if any(checkpoint != "preview" for checkpoint in checkpoints):
+                raise DomainError("UNSUPPORTED_CHECKPOINT", "M1 composition supports the preview checkpoint")
+            new_rev = rev + 1
+            payload["composition"] = {
+                "html_path": "composition/index.html",
+                "project_path": "project.json",
+                "metadata": metadata,
+            }
+            encoded = json.dumps(payload, sort_keys=True, allow_nan=False)
+            rev_dir = self._job_dir(row["job_id"]) / "revisions" / str(new_rev)
+            rev_dir.mkdir(parents=True)
+            try:
+                source_dir = rev_dir / "composition"
+                source_dir.mkdir()
+                (source_dir / "index.html").write_bytes(composition["html"].encode("utf-8"))
+                (rev_dir / "project.json").write_text(
+                    json.dumps(metadata, sort_keys=True, allow_nan=False), encoding="utf-8"
+                )
+                (rev_dir / "input.json").write_text(encoded, encoding="utf-8")
+                db.execute("INSERT INTO revisions VALUES (?,?,?)", (job_id, new_rev, encoded))
+                seq = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM stage_history WHERE job_id=?",
+                                 (job_id,)).fetchone()[0]
+                db.execute("INSERT INTO stage_history VALUES (?,?,?,?,?,?,?)",
+                           (job_id, new_rev, seq, "write_composition", row["stage"],
+                            "composition_draft", "custom HTML composition"))
+                db.execute("UPDATE jobs SET rev=?, payload=?, stage='composition_draft', status='draft', error=NULL WHERE job_id=?",
+                           (new_rev, encoded, job_id))
+                db.commit()
+            except Exception:
+                shutil.rmtree(rev_dir, ignore_errors=True)
+                raise
         return self.get(job_id)
 
     def revise(self, job_id: str, rev: int, patch: dict) -> dict:
@@ -227,7 +313,10 @@ class JobStore:
             db.execute("BEGIN IMMEDIATE")
             row = self._job(db, job_id)
             self._check_rev(row, rev)
-            payload = json.loads(row["payload"])
+            original_payload = json.loads(row["payload"])
+            if "composition" in patch:
+                raise DomainError("USE_WRITE_COMPOSITION", "provide the complete validated composition value")
+            payload = copy.deepcopy(original_payload)
             # A new cue document supersedes the per-cue override map: keeping the
             # old overrides would silently re-apply timestamps the new document
             # just replaced, and the cards would drift away from the narration.
@@ -246,18 +335,35 @@ class JobStore:
             except (TypeError, ValueError) as exc:
                 raise DomainError("INVALID_PAYLOAD", "revision must be JSON") from exc
             new_rev = rev + 1
-            rollback = None
-            for field, target in DOC_REVISION_ROLLBACK.items():
-                if field in patch and payload.get(field) != json.loads(row["payload"]).get(field):
-                    rollback = target if rollback is None else min(rollback, target, key=stage_index)
+            custom = isinstance(original_payload.get("composition"), dict)
+            rollback = "composition_draft" if custom else None
+            if not custom:
+                for field, target in DOC_REVISION_ROLLBACK.items():
+                    if field in patch and payload.get(field) != original_payload.get(field):
+                        rollback = target if rollback is None else min(rollback, target, key=stage_index)
             rev_dir = self._job_dir(job_id) / "revisions" / str(new_rev)
             rev_dir.mkdir(parents=True)
-            (rev_dir / "input.json").write_text(encoded, encoding="utf-8")
-            db.execute("INSERT INTO revisions VALUES (?,?,?)", (job_id, new_rev, json.dumps(payload)))
-            if rollback is None:
-                rollback = row["stage"]
-            db.execute("UPDATE jobs SET rev=?, payload=?, stage=?, status='draft', error=NULL WHERE job_id=?", (new_rev, json.dumps(payload), rollback, job_id))
-            db.commit()
+            try:
+                if custom:
+                    old_dir = self._job_dir(job_id) / "revisions" / str(rev)
+                    old_html = self._safe(old_dir / "composition" / "index.html")
+                    old_project = self._safe(old_dir / "project.json")
+                    if (old_html.is_symlink() or old_project.is_symlink()
+                            or not old_html.is_file() or not old_project.is_file()):
+                        raise DomainError("INVALID_SNAPSHOT", "composition revision files are unavailable")
+                    (rev_dir / "composition").mkdir()
+                    shutil.copyfile(old_html, rev_dir / "composition" / "index.html")
+                    shutil.copyfile(old_project, rev_dir / "project.json")
+                (rev_dir / "input.json").write_text(encoded, encoding="utf-8")
+                db.execute("INSERT INTO revisions VALUES (?,?,?)", (job_id, new_rev, encoded))
+                if rollback is None:
+                    rollback = row["stage"]
+                db.execute("UPDATE jobs SET rev=?, payload=?, stage=?, status='draft', error=NULL WHERE job_id=?",
+                           (new_rev, encoded, rollback, job_id))
+                db.commit()
+            except Exception:
+                shutil.rmtree(rev_dir, ignore_errors=True)
+                raise
         return self.get(job_id)
 
     def set_stage(self, job_id, rev, stage, note=""):
@@ -365,9 +471,18 @@ class JobStore:
             db.execute("BEGIN IMMEDIATE")
             row = self._job(db, job_id); self._check_rev(row, rev)
             required = TARGET_STAGE[target]
+            payload = json.loads(row["payload"])
+            custom = isinstance(payload.get("composition"), dict)
+            if custom and target == "preview":
+                required = "composition_draft"
+            elif custom and target == "final" and _preview_approval_required(payload) and row["stage"] == "preview":
+                required = "preview"
             if row["stage"] != required:
                 raise DomainError("STAGE_ORDER", f"{target} requires stage {required} (at {row['stage']})")
-            stage_for_target = {"preview": "script_style", "final": "preview"}.get(target)
+            if custom:
+                stage_for_target = "preview" if target == "final" and _preview_approval_required(payload) else None
+            else:
+                stage_for_target = {"preview": "script_style", "final": "preview"}.get(target)
             if stage_for_target and not self._approved(db, job_id, rev, stage_for_target):
                 raise DomainError("APPROVAL_REQUIRED", stage_for_target)
             active = db.execute("SELECT 1 FROM runs WHERE job_id=? AND status='running'", (job_id,)).fetchone()
@@ -449,9 +564,18 @@ class JobStore:
             db.execute("UPDATE runs SET status=?, error=? WHERE run_id=?", (status, error, run_id))
             if status == "finished":
                 next_stage = {"style_frame": "style_frame", "preview": "preview", "final": "final_ready"}.get(run["target"])
+                from_stage = TARGET_STAGE.get(run["target"])
+                if run["target"] == "preview":
+                    job = db.execute("SELECT payload FROM jobs WHERE job_id=? AND rev=?",
+                                     (run["job_id"], run["rev"])).fetchone()
+                    if job:
+                        payload = json.loads(job["payload"])
+                        if isinstance(payload.get("composition"), dict):
+                            from_stage = "composition_draft"
+                            next_stage = "preview" if _preview_approval_required(payload) else "final_ready"
                 if next_stage:
                     db.execute("UPDATE jobs SET stage=? WHERE job_id=? AND rev=? AND stage=?",
-                               (next_stage, run["job_id"], run["rev"], TARGET_STAGE[run["target"]]))
+                               (next_stage, run["job_id"], run["rev"], from_stage))
             db.execute("UPDATE jobs SET status=?, error=? WHERE job_id=? AND rev=?",
                        (status, error, run["job_id"], run["rev"]))
             db.commit()
@@ -474,10 +598,16 @@ class JobStore:
     def get(self, job_id):
         with self._db() as db:
             row = self._job(db, job_id)
+            try:
+                payload = json.loads(row["payload"])
+            except (TypeError, ValueError):
+                payload = {}
             arts = [dict(a) for a in db.execute("SELECT id,rev,kind,path FROM artifacts WHERE job_id=? ORDER BY rowid", (job_id,))]
             history = [dict(h) for h in db.execute(
                 "SELECT rev, seq, action, from_stage, to_stage, note FROM stage_history WHERE job_id=? ORDER BY seq",
                 (job_id,))]
             return {"job_id": row["job_id"], "rev": row["rev"], "status": row["status"],
                     "error": row["error"], "artifacts": arts,
-                    "stage": row["stage"], "origin": row["origin"], "stage_history": history}
+                    "stage": row["stage"], "origin": row["origin"], "stage_history": history,
+                    "mode": payload.get("mode", "collaborative"),
+                    "requirements": payload.get("requirements", {})}

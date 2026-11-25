@@ -11,6 +11,7 @@ import threading
 import time
 from pathlib import Path
 
+from .composition import COMPOSITION_SCHEMA
 from .jobs import STAGE_KIND, DomainError, JobStore
 from .worker import FIXTURES, ID, MEDIA, ROOT, _valid_words, episode_docs, owned, reconcile, submit, execute_run
 
@@ -576,7 +577,8 @@ def _artifact(store, job, artifact):
 
 def _job(store, action, payload):
     shape = {
-        'create': (('brief',), ()), 'get': (('job_id',), ('run_id',)),
+        'create': (('brief',), ('mode', 'requirements')), 'get': (('job_id',), ('run_id',)),
+        'write_composition': (('job_id', 'rev', 'value'), ()),
         'revise': (('job_id', 'rev'), ('patch', 'import_voice')),
         'annotate': (('job_id', 'rev', 't_ms', 'text'), ('cue_id',)),
         'approve': (('job_id', 'rev', 'stage', 'artifact_id'), ()),
@@ -594,7 +596,8 @@ def _job(store, action, payload):
         brief = payload['brief']
         if not isinstance(brief, str) or len(brief) > 12000:
             raise DomainError('INVALID_PAYLOAD', 'brief must be text up to 12000 characters')
-        return store.create(brief)
+        return store.create(brief, mode=payload.get('mode', 'collaborative'),
+                            requirements=payload.get('requirements'))
     job = _identifier(payload['job_id'])
     current = store.get(job)
     if action in _STAGE_ROUTES:
@@ -614,6 +617,8 @@ def _job(store, action, payload):
     rev = _revision(payload['rev'])
     if rev != current['rev']:
         raise DomainError('STALE_REVISION', f"expected {current['rev']}")
+    if action == 'write_composition':
+        return store.write_composition(job, rev, payload['value'])
     if action == 'attach_storyboard':
         # The storyboard is a reference image the operator drops in after the
         # script is approved; the render targets derive their shot list from it.
@@ -682,7 +687,9 @@ def dispatch(name, args, **_):
                     run = store.claim(job, rev, target)
                     data = execute_run(store, run['run_id'])
                 else:
-                    episode_docs(_snapshot(store, job, rev))
+                    snapshot = _snapshot(store, job, rev)
+                    if not isinstance(snapshot.get('composition'), dict):
+                        episode_docs(snapshot)
                     data = submit(store, job, rev, target)
             else:
                 _check_keys(args, ('job_id', 'artifact_id'))
@@ -704,11 +711,39 @@ def _schema(description, properties):
 
 
 _identifier_type = {'type': 'string', 'pattern': '^[A-Za-z0-9_-]{16}$'}
+_job_payload_schema = {
+    'type': 'object',
+    'description': 'Action-specific UMP fields; composition values accept no filesystem paths.',
+    'properties': {
+        'brief': {'type': 'string', 'maxLength': 12000},
+        'job_id': _identifier_type,
+        'run_id': _identifier_type,
+        'rev': {'type': 'integer', 'minimum': 1, 'maximum': 999999999},
+        'mode': {'type': 'string', 'enum': ['autonomous', 'collaborative', 'directed']},
+        'requirements': {'type': 'object'},
+        'value': COMPOSITION_SCHEMA,
+        'patch': {'type': 'object'},
+        'import_voice': {'type': 'boolean', 'const': True},
+        't_ms': {'type': 'integer', 'minimum': 0},
+        'text': {'type': 'string', 'minLength': 1},
+        'cue_id': {'type': ['string', 'null']},
+        'stage': {'type': 'string', 'enum': list(STAGE_KIND)},
+        'artifact_id': _identifier_type,
+        'sources': {'type': 'array', 'items': {'type': 'object'}},
+        'naskah': {'type': 'object'},
+        'cue': {'type': 'object'},
+        'origin': {'type': 'string', 'const': 'imported'},
+        'style_id': {'type': 'string'},
+        'storyboard': {'type': 'string'},
+    },
+    'additionalProperties': False,
+}
 SCHEMAS = {
     'ump_styles': _schema('List UMP style presets and their renderability.', {}),
     'ump_job': _schema('Create, read, revise, annotate or record explicit UMP approval. Load ump:motion-pipeline.', {
-        'action': {'type': 'string', 'enum': ['create', 'get', 'set_brief', 'research', 'write_naskah', 'import_naskah', 'select_style', 'revise', 'annotate', 'approve']},
-        'payload': {'type': 'object', 'description': 'create: brief; get: job_id [run_id]; set_brief: job_id, rev, patch.brief; research: job_id, rev, sources; write_naskah: job_id, rev, naskah, cue; import_naskah: same plus origin="imported"; select_style: job_id, rev, style_id; revise: job_id, rev, patch and/or import_voice; annotate: job_id, rev, t_ms, text [cue_id]; approve: job_id, rev, stage, artifact_id. Never pass file paths.'},
+        'action': {'type': 'string', 'enum': ['create', 'get', 'set_brief', 'research', 'write_naskah', 'import_naskah', 'select_style', 'revise', 'annotate', 'approve', 'write_composition']},
+        'payload': {**_job_payload_schema,
+                    'description': 'create: brief [mode, requirements]; write_composition: job_id, rev, value with bounded UTF-8 HTML and pinned silent metadata; other actions use their documented fields. Never pass filesystem paths for a composition.'},
     }),
     'ump_render': _schema('Start a nonblocking run for the specified job revision: a document snapshot (brief, research, naskah, style_decision) or a render (style_frame, preview, final).', {
         'job_id': _identifier_type, 'rev': {'type': 'integer', 'minimum': 1},
