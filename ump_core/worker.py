@@ -3,18 +3,23 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
 import time
+import uuid
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import sandbox
 from .jobs import DomainError, JobStore
 
 # Code and data live apart on purpose.
@@ -198,6 +203,55 @@ def _read(path):
 
 def _write(path, doc):
     path.write_text(json.dumps(doc, ensure_ascii=False, allow_nan=False), encoding='utf-8')
+
+
+def _copy_regular_output(source, destination, *, workspace, max_bytes):
+    workspace = Path(workspace).resolve(strict=True)
+    source = Path(source)
+    destination = Path(destination)
+    if (type(max_bytes) is not int or max_bytes <= 0 or not source.is_absolute()
+            or source.parent != workspace):
+        raise DomainError('INVALID_ARTIFACT', 'invalid renderer output path or size limit')
+
+    temporary = destination.with_name(f'.{destination.name}.{uuid.uuid4().hex}.tmp')
+    source_fd = destination_fd = None
+    try:
+        source_fd = os.open(source, os.O_RDONLY | os.O_CLOEXEC | getattr(os, 'O_NOFOLLOW', 0))
+        info = os.fstat(source_fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_nlink != 1 or info.st_size <= 0 or info.st_size > max_bytes):
+            raise DomainError('INVALID_ARTIFACT', 'renderer output is not a bounded private regular file')
+        destination_fd = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | getattr(os, 'O_NOFOLLOW', 0),
+            0o600,
+        )
+        copied = 0
+        with os.fdopen(source_fd, 'rb') as reader, os.fdopen(destination_fd, 'wb') as writer:
+            source_fd = destination_fd = None
+            while chunk := reader.read(1 << 20):
+                copied += len(chunk)
+                if copied > max_bytes:
+                    raise DomainError('INVALID_ARTIFACT', 'renderer output exceeds its size limit')
+                writer.write(chunk)
+            after = os.fstat(reader.fileno())
+            if (copied != info.st_size or after.st_ino != info.st_ino
+                    or after.st_size != info.st_size or after.st_nlink != 1):
+                raise DomainError('INVALID_ARTIFACT', 'renderer output changed while being copied')
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.replace(temporary, destination)
+    except DomainError:
+        temporary.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise DomainError('INVALID_ARTIFACT', 'cannot safely copy renderer output') from exc
+    finally:
+        if source_fd is not None:
+            os.close(source_fd)
+        if destination_fd is not None:
+            os.close(destination_fd)
 
 
 def _valid_words(doc):
@@ -416,6 +470,210 @@ def _render(store, run, directory, command):
     return _mux(directory, episode, brand, cues, asset_root, target, command)
 
 
+def _drain_bounded(stream, buffer, limit=16 * 1024):
+    while True:
+        chunk = stream.read(8192)
+        if not chunk:
+            return
+        buffer.extend(chunk)
+        if len(buffer) > limit:
+            del buffer[:-limit]
+
+
+def _remaining_seconds(deadline):
+    return max(0.1, min(float(sandbox.MAX_RUNTIME_S), deadline - time.monotonic()))
+
+
+def _tail_text(buffer, workspace):
+    return bytes(buffer).decode('utf-8', 'replace').strip().replace(str(workspace), '<workspace>')[-1200:]
+
+
+def _validate_custom_video(path, metadata, deadline):
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-count_frames', '-show_streams', '-show_format', '-of', 'json', str(path)],
+            capture_output=True, text=True, timeout=_remaining_seconds(deadline),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise DomainError('RENDER_TIMEOUT', 'custom video validation timed out') from exc
+    if result.returncode:
+        raise DomainError('INVALID_ARTIFACT', result.stderr.strip()[-800:] or 'ffprobe rejected custom video')
+    try:
+        info = json.loads(result.stdout)
+        streams = info['streams']
+        video = streams[0]
+        duration = float(info['format']['duration'])
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise DomainError('INVALID_ARTIFACT', 'ffprobe returned incomplete custom video metadata') from exc
+    expected_duration = metadata['duration_frames'] / metadata['fps']
+    if (len(streams) != 1 or video.get('codec_type') != 'video' or video.get('codec_name') != 'h264'
+            or video.get('width') != metadata['width'] or video.get('height') != metadata['height']
+            or video.get('avg_frame_rate') != f"{metadata['fps']}/1"
+            or video.get('nb_read_frames') != str(metadata['duration_frames'])
+            or abs(duration - expected_duration) > 0.01):
+        raise DomainError('INVALID_ARTIFACT', 'custom video codec, dimensions, rate, frames, or duration mismatch')
+
+
+def _render_custom(store, run, directory, deadline):
+    from .composition import validate_composition
+
+    snapshot = owned(store.root, run['snapshot_path'])
+    payload = _read(snapshot)
+    composition = payload.get('composition')
+    target = run['target']
+    if not isinstance(composition, dict) or target not in {'preview', 'final'}:
+        raise DomainError('INVALID_COMPOSITION', 'custom renderer requires a preview or final composition')
+    html_name = composition.get('html_path')
+    project_name = composition.get('project_path')
+    if not isinstance(html_name, str) or not isinstance(project_name, str):
+        raise DomainError('INVALID_COMPOSITION', 'missing revision-owned source paths')
+    html_source = owned(snapshot.parent, html_name)
+    project_source = owned(snapshot.parent, project_name)
+    try:
+        html_bytes = html_source.read_bytes()
+        project_bytes = project_source.read_bytes()
+        metadata = json.loads(project_bytes)
+        html = html_bytes.decode('utf-8', 'strict')
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise DomainError('INVALID_COMPOSITION', 'revision-owned HTML or project metadata is unreadable') from exc
+    if not isinstance(metadata, dict) or composition.get('metadata') != metadata:
+        raise DomainError('INVALID_COMPOSITION', 'project metadata does not match the immutable revision')
+    validated = validate_composition({'html': html, **metadata})
+    html_bytes = validated['html'].encode('utf-8')
+
+    workspace = sandbox.create_workspace('c' + uuid.uuid4().hex[:15])
+    ffmpeg_process = node_process = None
+    ffmpeg_unit = node_unit = None
+    drainers = []
+    node_tail = bytearray()
+    ffmpeg_tail = bytearray()
+    ffmpeg_stdout_tail = bytearray()
+    try:
+        staged_html = workspace / 'composition' / 'index.html'
+        staged_html.parent.mkdir(mode=0o700)
+        staged_html.write_bytes(html_bytes)
+        staged_project = workspace / 'project.json'
+        staged_project.write_bytes(project_bytes)
+        work_video = workspace / 'preview.partial.mp4'
+        ffmpeg_argv = [
+            'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+            '-f', 'image2pipe', '-framerate', str(metadata['fps']), '-vcodec', 'png', '-i', 'pipe:0',
+            '-frames:v', str(metadata['duration_frames']), '-an', '-c:v', 'libx264', '-profile:v', 'high',
+            '-preset', 'fast', '-crf', '18', '-threads', '2', '-pix_fmt', 'yuv420p',
+            '-r', str(metadata['fps']), '-movflags', '+faststart', '-fs', str(512 * 1024 * 1024),
+            str(work_video),
+        ]
+        ffmpeg_process, ffmpeg_unit = sandbox.start_isolated(
+            ffmpeg_argv, workspace=workspace, stdin=subprocess.PIPE,
+            timeout_s=_remaining_seconds(deadline), private_pid_namespace=True,
+        )
+        if ffmpeg_process.stdin is None or ffmpeg_process.stderr is None or ffmpeg_process.stdout is None:
+            raise DomainError('ISOLATION_UNAVAILABLE', 'FFmpeg pipes were not created')
+        for stream, buffer in ((ffmpeg_process.stderr, ffmpeg_tail), (ffmpeg_process.stdout, ffmpeg_stdout_tail)):
+            thread = threading.Thread(target=_drain_bounded, args=(stream, buffer), daemon=True)
+            thread.start()
+            drainers.append(thread)
+
+        recorder = ['node', str(CODE_ROOT / 'scripts' / 'record_custom.mjs'), str(staged_html), str(staged_project)]
+        node_process, node_unit = sandbox.start_isolated(
+            recorder, workspace=workspace, timeout_s=_remaining_seconds(deadline),
+            private_pid_namespace=True,
+        )
+        if node_process.stdout is None or node_process.stderr is None:
+            raise DomainError('ISOLATION_UNAVAILABLE', 'browser recorder pipes were not created')
+        thread = threading.Thread(target=_drain_bounded, args=(node_process.stderr, node_tail), daemon=True)
+        thread.start()
+        drainers.append(thread)
+        try:
+            while chunk := os.read(node_process.stdout.fileno(), 64 * 1024):
+                ffmpeg_process.stdin.write(chunk)
+        except BrokenPipeError as exc:
+            raise DomainError('RENDER_FAILED', 'FFmpeg closed the custom frame stream') from exc
+        finally:
+            if ffmpeg_process.stdin is not None:
+                ffmpeg_process.stdin.close()
+                ffmpeg_process.stdin = None
+
+        node_status = sandbox.wait_isolated(node_process, node_unit, timeout_s=_remaining_seconds(deadline))
+        ffmpeg_status = sandbox.wait_isolated(ffmpeg_process, ffmpeg_unit, timeout_s=_remaining_seconds(deadline))
+        for thread in drainers:
+            thread.join(timeout=5)
+        if any(thread.is_alive() for thread in drainers):
+            raise DomainError('RENDER_FAILED', 'sandbox output pipe did not close')
+        if node_process.stdout is not None:
+            node_process.stdout.close()
+        if node_process.stderr is not None:
+            node_process.stderr.close()
+        if ffmpeg_process.stdout is not None:
+            ffmpeg_process.stdout.close()
+        if ffmpeg_process.stderr is not None:
+            ffmpeg_process.stderr.close()
+        if node_status == 124 or ffmpeg_status == 124:
+            raise DomainError('RENDER_TIMEOUT', 'custom browser capture or FFmpeg encode timed out')
+        if node_status:
+            detail = _tail_text(node_tail, workspace)
+            raise DomainError('RENDER_FAILED', f'custom recorder exit {node_status}: {detail}')
+        if ffmpeg_status:
+            detail = _tail_text(ffmpeg_tail, workspace)
+            raise DomainError('RENDER_FAILED', f'FFmpeg exit {ffmpeg_status}: {detail}')
+
+        partial = directory / f'{target}.partial.mp4'
+        _copy_regular_output(work_video, partial, workspace=workspace, max_bytes=512 * 1024 * 1024)
+        _validate_custom_video(partial, validated, deadline)
+        source_zip = directory / 'source.zip'
+        manifest = {
+            'schema_version': 1,
+            'files': {
+                'index.html': {'sha256': hashlib.sha256(html_bytes).hexdigest(), 'size_bytes': len(html_bytes)},
+                'project.json': {'sha256': hashlib.sha256(project_bytes).hexdigest(), 'size_bytes': len(project_bytes)},
+            },
+        }
+        with zipfile.ZipFile(source_zip, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            archive.writestr('index.html', html_bytes)
+            archive.writestr('project.json', project_bytes)
+            archive.writestr('manifest.json', json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode('utf-8'))
+        player = directory / 'web-preview.html'
+        player.write_text(
+            '<!doctype html><html lang="en"><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>UMP preview</title><style>body{margin:0;background:#111;display:grid;place-items:center;min-height:100vh}'
+            'video{display:block;max-height:100vh;max-width:100vw}</style>'
+            f'<video controls playsinline preload="metadata" src="{MEDIA[target]}"></video></html>',
+            encoding='utf-8',
+        )
+        return partial, {'source': 'source.zip', 'web_preview': 'web-preview.html'}
+    finally:
+        if ffmpeg_process is not None and ffmpeg_process.stdin is not None:
+            try:
+                ffmpeg_process.stdin.close()
+            except OSError:
+                pass
+            ffmpeg_process.stdin = None
+        for process, unit in ((node_process, node_unit), (ffmpeg_process, ffmpeg_unit)):
+            if process is not None and unit is not None and process.poll() is None:
+                try:
+                    sandbox.wait_isolated(process, unit, timeout_s=3)
+                except Exception:
+                    try:
+                        sandbox._stop_unit(unit)
+                    except Exception:
+                        process.kill()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait(timeout=5)
+        for thread in drainers:
+            thread.join(timeout=5)
+        for process in (node_process, ffmpeg_process):
+            if process is not None:
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None and not stream.closed:
+                        stream.close()
+        if workspace.exists():
+            sandbox.cleanup_workspace(workspace)
+
+
 def _records_own_frames(brand):
     """True when the style must be captured by our recorder, not HyperFrames.
 
@@ -540,20 +798,28 @@ def execute_run(store: JobStore, run_id: str, argv=None):
             run = store.get_run(run_id)
             if run['status'] != 'running':
                 return run
+            additional_artifacts = {}
             if argv is not None:  # local test seam; never exposed as a tool or CLI option
                 command(argv)
                 raise DomainError('INVALID_ARTIFACT', 'test renderer produced no output')
             if run['target'] in DOCS:
                 output = _document(store, run, directory)
             else:
-                output = _render(store, run, directory, command)
+                with sandbox.render_lease():
+                    snapshot = owned(store.root, run['snapshot_path'])
+                    payload = _read(snapshot)
+                    if isinstance(payload.get('composition'), dict):
+                        output, additional_artifacts = _render_custom(store, run, directory, deadline)
+                    else:
+                        output = _render(store, run, directory, command)
             result = directory / MEDIA[run['target']]
             output.replace(result)
-            return store.finish(run_id, result.name, None)
+            return store.finish(run_id, result.name, None, additional_artifacts=additional_artifacts)
         except (Exception, SystemExit) as exc:
             error = str(exc).replace(str(directory), '<run>').replace('\n', ' ')[:500]
             # Keep the diagnostic log; staged copies and partial media are never published.
-            for name in ('frames.mp4', 'partial.mp4', *MEDIA.values(), *DOCS.values()):
+            for name in ('frames.mp4', 'partial.mp4', 'preview.partial.mp4', 'final.partial.mp4',
+                         'source.zip', 'web-preview.html', *MEDIA.values(), *DOCS.values()):
                 (directory / name).unlink(missing_ok=True)
             return _fail_if_running(store, run_id, error or type(exc).__name__)
 

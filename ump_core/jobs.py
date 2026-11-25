@@ -542,25 +542,47 @@ class JobStore:
             db.commit()
         return self.get(job_id)
 
-    def finish(self, run_id, artifact, error):
+    def finish(self, run_id, artifact, error, *, additional_artifacts=None):
         with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             run = db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
             if not run or run["status"] != "running":
                 raise DomainError("INVALID_STATE", "run")
             artifact_row = None
+            additional_rows = []
             status = "failed" if error is not None else "finished"
             if status == "finished":
-                run_dir = self.root / "runs" / run_id
-                relative = Path(artifact) if artifact else Path(".")
-                p = (run_dir / relative).resolve()
-                if relative.is_absolute() or not p.is_relative_to(run_dir) or not p.is_file():
-                    raise DomainError("INVALID_ARTIFACT", "run output")
-                artifact_id = secrets.token_urlsafe(12)
-                rel = p.relative_to(self.root).as_posix()
-                db.execute("INSERT INTO artifacts VALUES (?,?,?,?,?)", (artifact_id, run["job_id"], run["rev"], run["target"], rel))
-                artifact_row = {"id": artifact_id, "job_id": run["job_id"], "rev": run["rev"], "kind": run["target"], "path": rel}
-                db.execute("UPDATE runs SET artifact_id=? WHERE run_id=?", (artifact_id, run_id))
+                run_dir = (self.root / "runs" / run_id).resolve()
+                if additional_artifacts is None:
+                    additional_artifacts = {}
+                if not isinstance(additional_artifacts, dict):
+                    raise DomainError("INVALID_ARTIFACT", "additional outputs")
+                outputs = [(run["target"], artifact)]
+                for kind, name in additional_artifacts.items():
+                    if not isinstance(kind, str) or not kind or kind == run["target"]:
+                        raise DomainError("INVALID_ARTIFACT", "additional output kind")
+                    outputs.append((kind, name))
+                validated = []
+                for kind, name in outputs:
+                    relative = Path(name) if name else Path(".")
+                    p = (run_dir / relative).resolve()
+                    if relative.is_absolute() or not p.is_relative_to(run_dir) or not p.is_file():
+                        raise DomainError("INVALID_ARTIFACT", "run output")
+                    validated.append((kind, p))
+                for kind, p in validated:
+                    artifact_id = secrets.token_urlsafe(12)
+                    rel = p.relative_to(self.root).as_posix()
+                    db.execute("INSERT INTO artifacts VALUES (?,?,?,?,?)",
+                               (artifact_id, run["job_id"], run["rev"], kind, rel))
+                    row = {"id": artifact_id, "job_id": run["job_id"], "rev": run["rev"],
+                           "kind": kind, "path": rel}
+                    if kind == run["target"]:
+                        artifact_row = row
+                        db.execute("UPDATE runs SET artifact_id=? WHERE run_id=?", (artifact_id, run_id))
+                    else:
+                        additional_rows.append(row)
+            elif additional_artifacts:
+                raise DomainError("INVALID_ARTIFACT", "failed run cannot publish additional outputs")
             db.execute("UPDATE runs SET status=?, error=? WHERE run_id=?", (status, error, run_id))
             if status == "finished":
                 next_stage = {"style_frame": "style_frame", "preview": "preview", "final": "final_ready"}.get(run["target"])
@@ -580,7 +602,10 @@ class JobStore:
                        (status, error, run["job_id"], run["rev"]))
             db.commit()
         result = self.get_run(run_id)
-        if artifact_row: result["artifact"] = artifact_row
+        if artifact_row:
+            result["artifact"] = artifact_row
+        if additional_rows:
+            result["additional_artifacts"] = additional_rows
         return result
 
     def get_run(self, run_id):

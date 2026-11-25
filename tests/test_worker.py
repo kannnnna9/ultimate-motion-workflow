@@ -18,6 +18,47 @@ class WorkerTests(unittest.TestCase):
         self.store = JobStore(self.root)
         self.job = self.store.create('test worker')['job_id']
 
+    def test_copy_regular_output_copies_bounded_workspace_file(self):
+        workspace = self.root / "sandbox"
+        workspace.mkdir()
+        source = workspace / "render.mp4"
+        source.write_bytes(b"video")
+        destination = self.root / "preview.partial.mp4"
+
+        worker._copy_regular_output(source, destination, workspace=workspace, max_bytes=8)
+
+        self.assertEqual(destination.read_bytes(), b"video")
+
+    def test_copy_regular_output_rejects_symlink(self):
+        workspace = self.root / "sandbox"
+        workspace.mkdir()
+        secret = self.root / "secret.bin"
+        secret.write_bytes(b"not-render-output")
+        source = workspace / "render.mp4"
+        source.symlink_to(secret)
+
+        with self.assertRaises(DomainError) as raised:
+            worker._copy_regular_output(source, self.root / "preview.partial.mp4",
+                                        workspace=workspace, max_bytes=64)
+
+        self.assertEqual(raised.exception.code, "INVALID_ARTIFACT")
+        self.assertFalse((self.root / "preview.partial.mp4").exists())
+
+    def test_copy_regular_output_rejects_hardlink(self):
+        workspace = self.root / "sandbox"
+        workspace.mkdir()
+        secret = self.root / "secret.bin"
+        secret.write_bytes(b"not-render-output")
+        source = workspace / "render.mp4"
+        os.link(secret, source)
+
+        with self.assertRaises(DomainError) as raised:
+            worker._copy_regular_output(source, self.root / "preview.partial.mp4",
+                                        workspace=workspace, max_bytes=64)
+
+        self.assertEqual(raised.exception.code, "INVALID_ARTIFACT")
+        self.assertFalse((self.root / "preview.partial.mp4").exists())
+
     def _advance_to_naskah_approved(self):
         chain = [
             ('set_brief', 'intake', 'brief_draft'),
@@ -35,6 +76,41 @@ class WorkerTests(unittest.TestCase):
                                    expect=expect, to=target)
         self.assertEqual(self.store.stage_of(self.job), 'storyboard')
         return self.store.get(self.job)['rev']
+
+    def test_finish_registers_additional_artifacts_atomically(self):
+        composition = {
+            "html": "<!doctype html><body>artifact test</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        }
+        job = self.store.create("artifact bundle", mode="autonomous")
+        custom = self.store.write_composition(job["job_id"], job["rev"], composition)
+        run = self.store.claim(job["job_id"], custom["rev"], "preview")
+        directory = self.root / "runs" / run["run_id"]
+        (directory / "preview.mp4").write_bytes(b"video")
+        (directory / "source.zip").write_bytes(b"source")
+        (directory / "web-preview.html").write_text("<video controls>", encoding="utf-8")
+
+        finished = self.store.finish(
+            run["run_id"], "preview.mp4", None,
+            additional_artifacts={"source": "source.zip", "web_preview": "web-preview.html"},
+        )
+        self.assertEqual(finished["status"], "finished")
+        self.assertEqual(finished["artifact"]["kind"], "preview")
+        self.assertEqual({item["kind"] for item in self.store.get(job["job_id"])["artifacts"]},
+                         {"preview", "source", "web_preview"})
+
+        second = self.store.create("artifact rollback", mode="autonomous")
+        custom2 = self.store.write_composition(second["job_id"], second["rev"], composition)
+        run2 = self.store.claim(second["job_id"], custom2["rev"], "preview")
+        (self.root / "runs" / run2["run_id"] / "preview.mp4").write_bytes(b"video")
+        with self.assertRaises(DomainError) as raised:
+            self.store.finish(run2["run_id"], "preview.mp4", None,
+                              additional_artifacts={"source": "../outside.zip"})
+        self.assertEqual(raised.exception.code, "INVALID_ARTIFACT")
+        self.assertEqual(self.store.get_run(run2["run_id"])["status"], "running")
+        self.assertFalse(self.store.get(second["job_id"])["artifacts"])
+        self.store.finish(run2["run_id"], None, "test abort")
 
     def test_worker_failure(self):
         rev = self._advance_to_naskah_approved()

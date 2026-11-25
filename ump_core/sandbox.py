@@ -176,7 +176,7 @@ def _safe_extra_paths(read_paths: Sequence[str | os.PathLike[str]]) -> list[Path
     return result
 
 
-def _landlock_rules(workspace: Path, read_paths: Sequence[Path]) -> dict[Path, int]:
+def _landlock_rules(workspace: Path, read_paths: Sequence[Path], *, private_proc: bool = False) -> dict[Path, int]:
     required = (
         Path("/usr"), Path("/etc"), Path("/sys"),
         Path("/dev"), Path("/dev/shm"), CODE_ROOT, Path(sys.base_prefix), workspace,
@@ -204,6 +204,8 @@ def _landlock_rules(workspace: Path, read_paths: Sequence[Path]) -> dict[Path, i
         add(path, _READ_ONLY)
     for path in read_paths:
         add(path, _READ_ONLY, required_path=True)
+    if private_proc:
+        add(Path("/proc"), _FS_EXECUTE | _FS_READ_DIR | _FS_READ_FILE, required_path=True)
     for path, rights in (
         (Path("/dev/null"), _FS_READ_FILE | _FS_WRITE_FILE),
         (Path("/dev/zero"), _FS_READ_FILE),
@@ -222,7 +224,7 @@ def _landlock_rules(workspace: Path, read_paths: Sequence[Path]) -> dict[Path, i
     return rules
 
 
-def _apply_landlock(workspace: Path, read_paths: Sequence[Path]) -> None:
+def _apply_landlock(workspace: Path, read_paths: Sequence[Path], *, private_proc: bool = False) -> None:
     create_nr, add_nr, restrict_nr = _landlock_syscalls()
     libc = ctypes.CDLL(None, use_errno=True)
     libc.syscall.restype = ctypes.c_long
@@ -236,7 +238,7 @@ def _apply_landlock(workspace: Path, read_paths: Sequence[Path]) -> None:
         error = ctypes.get_errno()
         raise DomainError("ISOLATION_UNAVAILABLE", f"landlock_create_ruleset: {os.strerror(error)}")
     try:
-        for path, rights in _landlock_rules(workspace, read_paths).items():
+        for path, rights in _landlock_rules(workspace, read_paths, private_proc=private_proc).items():
             path_fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
             try:
                 rule = _PathBeneathAttr(rights, path_fd)
@@ -259,6 +261,7 @@ def _wrapper_main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--read-path", action="append", default=[])
+    parser.add_argument("--allow-private-proc", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(list(argv))
     command = list(args.command)
@@ -268,8 +271,10 @@ def _wrapper_main(argv: Sequence[str]) -> int:
         raise DomainError("INVALID_PAYLOAD", "sandbox command is empty")
     workspace = _validated_workspace(args.workspace)
     read_paths = _safe_extra_paths(args.read_path)
+    if args.allow_private_proc and os.getpid() != 1:
+        raise DomainError("ISOLATION_UNAVAILABLE", "proc access requires a private PID namespace")
     os.chdir(workspace)
-    _apply_landlock(workspace, read_paths)
+    _apply_landlock(workspace, read_paths, private_proc=args.allow_private_proc)
     os.execvpe(command[0], command, os.environ.copy())
     return 127
 
@@ -305,16 +310,21 @@ def start_isolated(
     *,
     workspace: str | os.PathLike[str],
     read_paths: Sequence[str | os.PathLike[str]] = (),
+    stdin: int = subprocess.DEVNULL,
     timeout_s: float = MAX_RUNTIME_S,
+    private_pid_namespace: bool = False,
 ) -> tuple[subprocess.Popen[bytes], str]:
     timeout = _positive_timeout(timeout_s)
+    if stdin not in (subprocess.DEVNULL, subprocess.PIPE):
+        raise DomainError("INVALID_PAYLOAD", "sandbox stdin must be closed or piped")
     systemd_run = shutil.which("systemd-run")
     if not systemd_run:
         raise DomainError("ISOLATION_UNAVAILABLE", "systemd-run is required")
     work = _validated_workspace(workspace)
     command = _normalize_command(argv)
     extra_paths = _safe_extra_paths(read_paths)
-    unit_name = "ump-v2-render-" + uuid.uuid4().hex + ".service"
+    unit_prefix = "priv-ump-v2-render-" if private_pid_namespace else "ump-v2-render-"
+    unit_name = unit_prefix + uuid.uuid4().hex + ".service"
     env_values = {
         "HOME": str(work / "home"),
         "TMPDIR": str(work / "tmp"),
@@ -326,26 +336,51 @@ def start_isolated(
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
     }
-    wrapped = [
-        "/usr/bin/env", "-i", *(f"{key}={value}" for key, value in env_values.items()),
-        sys.executable, "-m", "ump_core.sandbox", "--workspace", str(work),
-    ]
-    for path in extra_paths:
-        wrapped.extend(("--read-path", str(path)))
-    wrapped.extend(("--", *command))
+    if private_pid_namespace:
+        sudo = shutil.which("sudo")
+        unshare = shutil.which("unshare")
+        setpriv = shutil.which("setpriv")
+        if not sudo or not unshare or not setpriv:
+            raise DomainError("ISOLATION_UNAVAILABLE", "sudo, unshare, and setpriv are required for a private PID namespace")
+        try:
+            privilege = subprocess.run([sudo, "-n", "true"], capture_output=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise DomainError("ISOLATION_UNAVAILABLE", "passwordless system-manager access is required") from exc
+        if privilege.returncode:
+            raise DomainError("ISOLATION_UNAVAILABLE", "passwordless system-manager access is required")
+        launch_command = [
+            unshare, "--pid", "--fork", "--mount-proc",
+            setpriv, f"--reuid={os.getuid()}", f"--regid={os.getgid()}", "--clear-groups", "--",
+            "/usr/bin/env", "-i", *(f"{key}={value}" for key, value in env_values.items()),
+            sys.executable, "-m", "ump_core.sandbox", "--workspace", str(work), "--allow-private-proc",
+        ]
+        for path in extra_paths:
+            launch_command.extend(("--read-path", str(path)))
+        launch_command.extend(("--", *command))
+        unit_command = [sudo, "-n", systemd_run, "--system", "--pipe", "--wait", "--collect", "--quiet", f"--unit={unit_name}"]
+    else:
+        launch_command = [
+            "/usr/bin/env", "-i", *(f"{key}={value}" for key, value in env_values.items()),
+            sys.executable, "-m", "ump_core.sandbox", "--workspace", str(work),
+        ]
+        for path in extra_paths:
+            launch_command.extend(("--read-path", str(path)))
+        launch_command.extend(("--", *command))
+        unit_command = [systemd_run, "--user", "--pipe", "--wait", "--collect", "--quiet", f"--unit={unit_name}"]
     properties = (
         "MemoryAccounting=yes", "MemoryMax=2G", "MemorySwapMax=0", "CPUQuota=200%",
-        "TasksMax=64", f"RuntimeMaxSec={timeout}s", "IPAddressDeny=any",
+        f"TasksMax={256 if private_pid_namespace else 64}",
+        *(("TimeoutStopSec=3s",) if private_pid_namespace else ()),
+        f"RuntimeMaxSec={timeout}s", "IPAddressDeny=any",
         "RestrictAddressFamilies=AF_UNIX", "ProtectProc=ptraceable",
         "ProtectSystem=strict", "ProtectHome=read-only", "NoNewPrivileges=yes",
         "UMask=0077", f"WorkingDirectory={work}", f"ReadWritePaths={work}",
     )
-    unit_command = [systemd_run, "--user", "--pipe", "--wait", "--collect", "--quiet", f"--unit={unit_name}"]
     unit_command.extend(f"--property={value}" for value in properties)
-    unit_command.extend(("--", *wrapped))
+    unit_command.extend(("--", *launch_command))
     try:
         process = subprocess.Popen(
-            unit_command, cwd=CODE_ROOT, stdin=subprocess.DEVNULL,
+            unit_command, cwd=CODE_ROOT, stdin=stdin,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
         )
     except OSError as exc:
@@ -356,20 +391,21 @@ def start_isolated(
 def _stop_unit(unit_name: str) -> None:
     if not _UNIT_RE.fullmatch(unit_name):
         raise DomainError("INVALID_PAYLOAD", "invalid transient unit name")
-    stop = subprocess.run(["systemctl", "--user", "stop", unit_name], capture_output=True, text=True, timeout=15)
+    manager = ["sudo", "-n", "systemctl", "--system"] if unit_name.startswith("priv-") else ["systemctl", "--user"]
+    stop = subprocess.run([*manager, "stop", unit_name], capture_output=True, text=True, timeout=15)
     if stop.returncode == 0:
         return
     state = subprocess.run(
-        ["systemctl", "--user", "show", unit_name, "--property=ActiveState", "--value"],
+        [*manager, "show", unit_name, "--property=ActiveState", "--value"],
         capture_output=True, text=True, timeout=15,
     )
     if state.returncode != 0 or state.stdout.strip() in {"inactive", "failed", "not-found"}:
         return
     subprocess.run(
-        ["systemctl", "--user", "kill", "--kill-who=all", "--signal=KILL", unit_name],
+        [*manager, "kill", "--kill-who=all", "--signal=KILL", unit_name],
         capture_output=True, text=True, timeout=15,
     )
-    retry = subprocess.run(["systemctl", "--user", "stop", unit_name], capture_output=True, text=True, timeout=15)
+    retry = subprocess.run([*manager, "stop", unit_name], capture_output=True, text=True, timeout=15)
     if retry.returncode != 0:
         raise DomainError("ISOLATION_STOP_FAILED", retry.stderr.strip() or stop.stderr.strip())
 

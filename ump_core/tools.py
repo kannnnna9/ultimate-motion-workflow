@@ -58,6 +58,7 @@ _EVENTS = {}
 _EVENT_LOCK = threading.Lock()
 _MAX_AUDIO = 20 * 1024 * 1024
 _MAX_IMAGE = 20 * 1024 * 1024
+_EXTRA_ARTIFACTS = {"source": "source.zip", "web_preview": "web-preview.html"}
 
 # action -> (stages it may start from, stage it lands in)
 # Every pipeline step is an explicit route; anything absent is INVALID_ACTION.
@@ -566,8 +567,9 @@ def _artifact(store, job, artifact):
     if not row:
         raise DomainError('NOT_FOUND', 'artifact')
     rel = Path(row['path'])
+    expected_name = MEDIA.get(row['kind'], _EXTRA_ARTIFACTS.get(row['kind']))
     if (len(rel.parts) != 3 or rel.parts[0] != 'runs' or not ID.fullmatch(rel.parts[1])
-            or rel.name != MEDIA.get(row['kind'])):
+            or rel.name != expected_name):
         raise DomainError('INVALID_ARTIFACT', 'not a registered worker output')
     path = owned(store.root, rel)
     if not path.is_file() or path.stat().st_size == 0:
