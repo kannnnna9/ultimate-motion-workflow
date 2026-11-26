@@ -10,6 +10,21 @@ from ump_core.assets import AssetStore
 from ump_core.jobs import DomainError, JobStore
 
 
+def audio_library_record(root, job_id, track_id, blob_ref, data, *, kind="music", sha256=None):
+    directory = root / "jobs" / job_id / "audio_blobs"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = directory / f"{blob_ref}.wav"
+    path.write_bytes(data)
+    path.chmod(0o600)
+    return {
+        "track_id": track_id, "blob_ref": blob_ref, "kind": kind, "extension": ".wav",
+        "sha256": sha256 or hashlib.sha256(data).hexdigest(), "size_bytes": len(data),
+        "media_type": "audio/wav", "codec": "pcm_s16le", "source_format": "wav",
+        "duration_ms": 20_000, "sample_rate": 16_000, "channels": 1,
+        "provenance": "operator Telegram upload", "rights_status": "unverified",
+    }
+
+
 class JobStoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -575,6 +590,107 @@ class JobStoreTests(unittest.TestCase):
         )
         self.assertEqual(second_asset["version"], 2)
         self.assertEqual(pinned_file.read_bytes(), svg.encode("utf-8"))
+
+    def test_write_composition_pins_voice_and_bed_blobs_across_revisions(self):
+        voice_data = b"immutable imported VO bytes"
+        bed_data = b"immutable imported bed bytes"
+        job = self.store.create("audio-pinned composition", mode="autonomous")
+        records = [
+            audio_library_record(self.root, job["job_id"], "voice", "A" * 16, voice_data, kind="voice"),
+            audio_library_record(self.root, job["job_id"], "bed", "B" * 16, bed_data, kind="music"),
+        ]
+        imported = self.store.revise(job["job_id"], job["rev"], {"audio_library": records})
+        uploads = [self.root / "original-voice.wav", self.root / "original-bed.wav"]
+        for upload, data in zip(uploads, (voice_data, bed_data)):
+            upload.write_bytes(data)
+        composition = {
+            "html": "<!doctype html><body>audio scene</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": True, "subtitles_enabled": False,
+            "audio_tracks": [
+                {"track_id": "voice", "blob_ref": "A" * 16, "kind": "voice",
+                 "offset_ms": 0, "trim_start_ms": 0, "trim_end_ms": 1_000,
+                 "gain_db": 0.0, "fade_in_ms": 0, "fade_out_ms": 0},
+                {"track_id": "bed", "blob_ref": "B" * 16, "kind": "music",
+                 "offset_ms": 0, "trim_start_ms": 0, "trim_end_ms": 1_000,
+                 "gain_db": -20.0, "fade_in_ms": 250, "fade_out_ms": 250},
+            ],
+        }
+        pinned = self.store.write_composition(job["job_id"], imported["rev"], composition)
+        revision = self.root / "jobs" / job["job_id"] / "revisions" / str(pinned["rev"])
+        project = json.loads((revision / "project.json").read_text(encoding="utf-8"))
+        tracks = {track["track_id"]: track for track in project["audio_tracks"]}
+        for track_id, data in (("voice", voice_data), ("bed", bed_data)):
+            track = tracks[track_id]
+            pinned_file = revision / "composition" / track["path"]
+            self.assertEqual(track["path"], f"audio/{track_id}.wav")
+            self.assertEqual(track["sha256"], hashlib.sha256(data).hexdigest())
+            self.assertEqual(pinned_file.read_bytes(), data)
+        for upload in uploads:
+            upload.write_bytes(b"the mutable Telegram cache has been replaced")
+        self.assertEqual((revision / "composition" / tracks["voice"]["path"]).read_bytes(), voice_data)
+        self.assertEqual((revision / "composition" / tracks["bed"]["path"]).read_bytes(), bed_data)
+
+        copied = self.store.revise(job["job_id"], pinned["rev"], {"brief": "metadata revision"})
+        copied_revision = self.root / "jobs" / job["job_id"] / "revisions" / str(copied["rev"])
+        copied_tracks = json.loads((copied_revision / "project.json").read_text(encoding="utf-8"))["audio_tracks"]
+        for track in copied_tracks:
+            expected = voice_data if track["track_id"] == "voice" else bed_data
+            self.assertEqual((copied_revision / "composition" / track["path"]).read_bytes(), expected)
+            self.assertEqual(track["sha256"], hashlib.sha256(expected).hexdigest())
+
+    def test_write_composition_rejects_stale_audio_blob_hash_and_aggregate_over_limit(self):
+        data = b"short audio blob"
+        stale_job = self.store.create("stale audio hash", mode="autonomous")
+        stale_record = audio_library_record(
+            self.root, stale_job["job_id"], "music1", "B" * 16, data, sha256="0" * 64,
+        )
+        stale_import = self.store.revise(stale_job["job_id"], stale_job["rev"], {"audio_library": [stale_record]})
+        base = {
+            "html": "<!doctype html><body>audio</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": True, "subtitles_enabled": False,
+            "audio_tracks": [{
+                "track_id": "music1", "blob_ref": "B" * 16, "kind": "music",
+                "offset_ms": 0, "trim_start_ms": 0, "trim_end_ms": 1_000,
+                "gain_db": -20.0, "fade_in_ms": 0, "fade_out_ms": 0,
+            }],
+        }
+        with self.assertRaises(DomainError) as stale:
+            self.store.write_composition(stale_job["job_id"], stale_import["rev"], base)
+        self.assertEqual(stale.exception.code, "AUDIO_INTEGRITY")
+        self.assertEqual(self.store.get(stale_job["job_id"])["rev"], stale_import["rev"])
+
+        trim_job = self.store.create("trim exceeds source", mode="autonomous")
+        trim_record = audio_library_record(self.root, trim_job["job_id"], "music1", "E" * 16, data)
+        trim_import = self.store.revise(trim_job["job_id"], trim_job["rev"], {"audio_library": [trim_record]})
+        trim_value = {**base, "audio_tracks": [{**base["audio_tracks"][0], "blob_ref": "E" * 16, "trim_end_ms": 20_001}]}
+        with self.assertRaises(DomainError) as out_of_range:
+            self.store.write_composition(trim_job["job_id"], trim_import["rev"], trim_value)
+        self.assertEqual(out_of_range.exception.code, "INVALID_AUDIO_TRACK")
+        self.assertEqual(self.store.get(trim_job["job_id"])["rev"], trim_import["rev"])
+
+        aggregate_job = self.store.create("oversized audio manifest", mode="autonomous")
+        records = [
+            audio_library_record(self.root, aggregate_job["job_id"], "music1", "C" * 16, b"1" * 30),
+            audio_library_record(self.root, aggregate_job["job_id"], "music2", "D" * 16, b"2" * 30),
+        ]
+        aggregate_import = self.store.revise(
+            aggregate_job["job_id"], aggregate_job["rev"], {"audio_library": records},
+        )
+        aggregate_composition = {
+            **base,
+            "audio_tracks": [
+                {**base["audio_tracks"][0], "track_id": record["track_id"], "blob_ref": record["blob_ref"]}
+                for record in records
+            ],
+        }
+        with patch("ump_core.composition.MAX_PINNED_AUDIO_BYTES", 50):
+            with self.assertRaises(DomainError) as oversized:
+                self.store.write_composition(aggregate_job["job_id"], aggregate_import["rev"], aggregate_composition)
+        self.assertEqual(oversized.exception.code, "AUDIO_BUNDLE_TOO_LARGE")
+        self.assertEqual(self.store.get(aggregate_job["job_id"])["rev"], aggregate_import["rev"])
+        self.assertFalse((self.root / "jobs" / aggregate_job["job_id"] / "revisions" / "3").exists())
 
     def test_write_composition_rejects_unknown_asset_version(self):
         AssetStore(self.root).add_svg(

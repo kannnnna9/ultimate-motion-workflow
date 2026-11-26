@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
+import math
 import os
 import re
 import secrets
+import stat
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -20,6 +24,9 @@ _APPROVAL = re.compile(
     r'(?:UMP\s+APPROVE\s+([A-Za-z0-9_-]{16})\s+([1-9][0-9]{0,8})\s+'
     r'(brief|research|naskah|style|storyboard|script_style|preview)\s+([A-Za-z0-9_-]{16}))\Z')
 _AUDIO = re.compile(r'UMP VO ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8})\Z')
+_AUDIO_IMPORT = re.compile(
+    r'UMP AUDIO ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8}) ([a-z][a-z0-9_-]{0,47}) '
+    r'(voice|music|sfx|ambience)\Z')
 # ---- sentence approval ---------------------------------------------------
 # The operator writes in Indonesian and should not have to type identifiers
 # they never see. A clear sentence of approval is taken as approval; anything
@@ -99,10 +106,10 @@ def inbound(event, gateway, **_):
     if getattr(raw, 'forward_origin', None) or getattr(raw, 'via_bot', None) or getattr(raw, 'is_automatic_forward', False):
         return
     text = event.text or ''
-    approval, voice = _APPROVAL.fullmatch(text), _AUDIO.fullmatch(text)
+    approval, voice, audio_import = _APPROVAL.fullmatch(text), _AUDIO.fullmatch(text), _AUDIO_IMPORT.fullmatch(text)
     if not ((approval and event.message_type == MessageType.TEXT and not event.media_urls)
-            or (voice and len(event.media_urls or ()) == 1 and len(event.media_types or ()) == 1
-                     and event.media_types[0].startswith('audio/'))):
+            or ((voice or audio_import) and len(event.media_urls or ()) == 1
+                and len(event.media_types or ()) == 1 and event.media_types[0].startswith('audio/'))):
         return
     if not gateway._is_user_authorized_for_source(source, allow_adapter_delegation=False):
         return
@@ -121,7 +128,7 @@ def inbound(event, gateway, **_):
         for stale in [k for k, v in _EVENTS.items() if isinstance(v, tuple) and now - v[0] > 600]:
             del _EVENTS[stale]
         if len(_EVENTS) < 512:
-            _EVENTS.setdefault(key, (now, text, event.media_urls[0] if voice else None))
+            _EVENTS.setdefault(key, (now, text, event.media_urls[0] if (voice or audio_import) else None))
 
 
 def _event_key():
@@ -295,36 +302,109 @@ def _consume_turn_text():
         _EVENTS["__operator_text__"] = ""
 
 
-def _attachment(store, job_id, requested):
+def _read_audio_attachment(requested):
+    """Read only the current owned Telegram audio, without following aliases."""
     from gateway.platforms.base import get_audio_cache_dir
     home = _home()
     cache = Path(get_audio_cache_dir())
     if cache not in (home / 'cache/audio', home / 'audio_cache') or cache.resolve() != cache:
         raise DomainError('INVALID_ATTACHMENT', 'runtime audio cache outside profile')
-    p = Path(requested or '')
-    if p.parent != cache or not re.fullmatch(r'audio_[0-9a-f]{12}\.(mp3|ogg|wav|m4a|opus|aac|flac|webm)', p.name):
+    path = Path(requested or '')
+    if path.parent != cache or not re.fullmatch(
+            r'audio_[0-9a-f]{12}\.(mp3|ogg|wav|m4a|opus|aac|flac|webm)', path.name):
         raise DomainError('INVALID_ATTACHMENT', 'expected the current Telegram audio attachment')
-    source = owned(cache, p.name)
+    source = owned(cache, path.name)
     try:
-        # O_NOFOLLOW and O_NONBLOCK keep an alias or non-regular cache entry from
-        # being substituted at the last component between validation and open.
         fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, 'rb') as stream:
-            import stat
-            st = os.fstat(stream.fileno())
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or not 0 < st.st_size <= _MAX_AUDIO:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_nlink != 1 or not 0 < info.st_size <= _MAX_AUDIO):
                 raise DomainError('INVALID_ATTACHMENT', 'audio must be a regular owned file up to 20 MiB')
             data = stream.read(_MAX_AUDIO + 1)
     except OSError as exc:
         raise DomainError('INVALID_ATTACHMENT', 'cached audio no longer available') from exc
     if not 0 < len(data) <= _MAX_AUDIO:
         raise DomainError('INVALID_ATTACHMENT', 'audio exceeds size limit')
-    name = secrets.token_urlsafe(12) + source.suffix
+    return data, source.suffix.lower()
+
+
+def _parse_audio_probe(probe, suffix):
+    from .composition import MAX_AUDIO_DURATION_MS, _AUDIO_FORMATS
+
+    if not isinstance(probe, dict) or not isinstance(probe.get("format"), dict):
+        raise DomainError("INVALID_AUDIO_METADATA", "ffprobe returned no format metadata")
+    streams = probe.get("streams")
+    if not isinstance(streams, list) or any(not isinstance(stream, dict) for stream in streams):
+        raise DomainError("INVALID_AUDIO_METADATA", "ffprobe returned no valid stream list")
+    audio_streams = [stream for stream in streams if stream.get("codec_type") == "audio"]
+    other_streams = []
+    for stream in streams:
+        if stream.get("codec_type") == "audio":
+            continue
+        disposition = stream.get("disposition")
+        if not isinstance(disposition, dict) or disposition.get("attached_pic") not in (1, "1", True):
+            other_streams.append(stream)
+    if len(audio_streams) != 1 or other_streams:
+        raise DomainError("INVALID_AUDIO_METADATA", "attachment must contain exactly one audio stream")
+    stream = audio_streams[0]
+    codec = stream.get("codec_name")
+    audio_format = _AUDIO_FORMATS.get(suffix)
+    format_names = probe["format"].get("format_name")
+    names = set(format_names.split(",")) if isinstance(format_names, str) else set()
+    if (audio_format is None or not isinstance(codec, str) or codec not in audio_format["codecs"]
+            or not names.intersection(audio_format["format_names"])):
+        raise DomainError("UNSUPPORTED_AUDIO_FORMAT", "codec or container is not in the supported audio set")
+    try:
+        seconds = float(probe["format"]["duration"])
+        duration_ms = int(round(seconds * 1000))
+        sample_rate = int(stream["sample_rate"])
+        channels = int(stream["channels"])
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise DomainError("INVALID_AUDIO_METADATA", "ffprobe returned invalid duration or stream values") from exc
+    if (not math.isfinite(seconds) or not 1 <= duration_ms <= MAX_AUDIO_DURATION_MS
+            or sample_rate < 1 or channels < 1):
+        raise DomainError("INVALID_AUDIO_METADATA", "audio duration or stream values are outside bounds")
+    return {
+        "codec": codec,
+        "media_type": audio_format["media_type"],
+        "source_format": audio_format["source_format"],
+        "duration_ms": duration_ms,
+        "sample_rate": sample_rate,
+        "channels": channels,
+    }
+
+
+def _probe_audio_file(path):
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-protocol_whitelist", "file", "-max_streams", "8",
+             "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,sample_rate,channels,disposition",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise DomainError("AUDIO_PROBE_FAILED", "local FFprobe could not inspect the audio attachment") from exc
+    if result.returncode:
+        raise DomainError("INVALID_AUDIO_METADATA", "FFprobe rejected the audio attachment")
+    try:
+        probe = json.loads(result.stdout)
+    except (TypeError, ValueError) as exc:
+        raise DomainError("INVALID_AUDIO_METADATA", "FFprobe returned malformed JSON") from exc
+    return _parse_audio_probe(probe, Path(path).suffix.lower())
+
+
+def _attachment(store, job_id, requested):
+    data, suffix = _read_audio_attachment(requested)
+    name = secrets.token_urlsafe(12) + suffix
     directory = owned(store.root, Path('jobs') / job_id / 'voice')
     directory.mkdir(mode=0o700, exist_ok=True)
-    with (directory / name).open('xb') as destination:
+    target = directory / name
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as destination:
         destination.write(data)
     return name
+
 
 
 def _read_image_attachment(requested):
@@ -614,6 +694,7 @@ def _job(store, action, payload):
     shape = {
         'create': (('brief',), ('mode', 'requirements')), 'get': (('job_id',), ('run_id',)),
         'write_composition': (('job_id', 'rev', 'value'), ()),
+        'import_audio': (('job_id', 'rev', 'track_id', 'kind'), ()),
         'revise': (('job_id', 'rev'), ('patch', 'import_voice')),
         'annotate': (('job_id', 'rev', 't_ms', 'text'), ('cue_id',)),
         'approve': (('job_id', 'rev', 'stage', 'artifact_id'), ()),
@@ -652,6 +733,48 @@ def _job(store, action, payload):
     rev = _revision(payload['rev'])
     if rev != current['rev']:
         raise DomainError('STALE_REVISION', f"expected {current['rev']}")
+    if action == 'import_audio':
+        track_id, kind = payload['track_id'], payload['kind']
+        if (not isinstance(track_id, str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,47}', track_id)
+                or not isinstance(kind, str) or kind not in {'voice', 'music', 'sfx', 'ambience'}):
+            raise DomainError('INVALID_AUDIO_TRACK', 'track_id or kind is invalid')
+        source = _authorization(
+            f'UMP AUDIO {job} {rev} {track_id} {kind}', None, None, 'ATTACHMENT_REQUIRED',
+        )
+        if current['stage'] not in {'intake', 'composition_draft', 'preview', 'final_ready'}:
+            raise DomainError('STAGE_ORDER', 'audio tracks can only be imported on the custom composition route')
+        from .composition import MAX_AUDIO_TRACKS, validate_audio_library
+        job_payload = store.get_revision_payload(job, rev)
+        library = validate_audio_library(job_payload.get('audio_library', []))
+        if len(library) >= MAX_AUDIO_TRACKS:
+            raise DomainError('AUDIO_TRACK_LIMIT_EXCEEDED', 'job audio library is full')
+        if any(record['track_id'] == track_id for record in library):
+            raise DomainError('AUDIO_TRACK_EXISTS', track_id)
+        data, suffix = _read_audio_attachment(source)
+        blob_ref = secrets.token_urlsafe(12)
+        audio_root = owned(store.root, Path('jobs') / job / 'audio_blobs')
+        audio_root.mkdir(mode=0o700, exist_ok=True)
+        blob_path = audio_root / f'{blob_ref}{suffix}'
+        fd = os.open(blob_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, 'wb') as output:
+                output.write(data)
+            probe = _probe_audio_file(blob_path)
+            record = {
+                'track_id': track_id, 'blob_ref': blob_ref, 'kind': kind,
+                'sha256': hashlib.sha256(data).hexdigest(), 'size_bytes': len(data),
+                'extension': suffix, 'source_format': probe['source_format'],
+                'media_type': probe['media_type'], 'codec': probe['codec'],
+                'duration_ms': probe['duration_ms'], 'sample_rate': probe['sample_rate'],
+                'channels': probe['channels'], 'provenance': 'Telegram DM audio attachment',
+                'rights_status': 'unverified',
+            }
+            updated_library = validate_audio_library([*library, record])
+            revised = store.revise(job, rev, {'audio_library': updated_library})
+            return {**revised, 'audio_library': updated_library}
+        except Exception:
+            blob_path.unlink(missing_ok=True)
+            raise
     if action == 'write_composition':
         return store.write_composition(job, rev, payload['value'])
     if action == 'attach_storyboard':
@@ -761,6 +884,8 @@ _job_payload_schema = {
         'value': COMPOSITION_SCHEMA,
         'patch': {'type': 'object'},
         'import_voice': {'type': 'boolean', 'const': True},
+        'track_id': {'type': 'string', 'pattern': '^[a-z][a-z0-9_-]{0,47}$'},
+        'kind': {'type': 'string', 'enum': ['voice', 'music', 'sfx', 'ambience']},
         't_ms': {'type': 'integer', 'minimum': 0},
         'text': {'type': 'string', 'minLength': 1},
         'cue_id': {'type': ['string', 'null']},
@@ -803,9 +928,9 @@ SCHEMAS = {
         },
     },
     'ump_job': _schema('Create, read, revise, annotate or record explicit UMP approval. Load ump:motion-pipeline.', {
-        'action': {'type': 'string', 'enum': ['create', 'get', 'set_brief', 'research', 'write_naskah', 'import_naskah', 'select_style', 'revise', 'annotate', 'approve', 'write_composition']},
+        'action': {'type': 'string', 'enum': ['create', 'get', 'set_brief', 'research', 'write_naskah', 'import_naskah', 'select_style', 'revise', 'annotate', 'approve', 'write_composition', 'import_audio']},
         'payload': {**_job_payload_schema,
-                    'description': 'create: brief [mode, requirements]; write_composition: job_id, rev, value with bounded UTF-8 HTML and pinned silent metadata; other actions use their documented fields. Never pass filesystem paths for a composition.'},
+                    'description': 'create: brief [mode, requirements]; write_composition: job_id, rev, value with bounded HTML and pinned metadata; import_audio: job_id, rev, track_id, kind bound to the current Telegram audio caption. Never pass filesystem paths for a composition or audio track.'},
     }),
     'ump_render': _schema('Start a nonblocking run for the specified job revision: a document snapshot (brief, research, naskah, style_decision) or a render (style_frame, preview, final).', {
         'job_id': _identifier_type, 'rev': {'type': 'integer', 'minimum': 1},

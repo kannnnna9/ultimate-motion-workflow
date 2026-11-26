@@ -26,6 +26,19 @@ def manifest_asset(asset_id="leaf", size_bytes=1):
     }
 
 
+AUDIO_TRACK = {
+    "track_id": "music1",
+    "blob_ref": "A" * 16,
+    "kind": "music",
+    "offset_ms": 0,
+    "trim_start_ms": 0,
+    "trim_end_ms": 20_000,
+    "gain_db": -20.0,
+    "fade_in_ms": 500,
+    "fade_out_ms": 500,
+}
+
+
 class CompositionValidationTests(unittest.TestCase):
     def test_accepts_the_pinned_silent_vertical_composition(self):
         self.assertEqual(validate_composition(VALID), VALID)
@@ -108,6 +121,59 @@ class CompositionValidationTests(unittest.TestCase):
                 with self.assertRaises(DomainError) as raised:
                     validate_composition(payload)
                 self.assertEqual(raised.exception.code, "INVALID_COMPOSITION")
+
+    def test_accepts_bounded_voice_and_bed_tracks_when_audio_is_explicitly_enabled(self):
+        voice = {**AUDIO_TRACK, "track_id": "voice", "blob_ref": "V" * 16, "kind": "voice", "gain_db": 0.0}
+        bed = {**AUDIO_TRACK, "track_id": "bed", "blob_ref": "B" * 16, "kind": "music", "gain_db": -20.0}
+        payload = {**VALID, "audio_enabled": True, "audio_tracks": [voice, bed]}
+        self.assertEqual(validate_composition(payload), payload)
+
+    def test_audio_enablement_must_match_track_presence(self):
+        for payload in (
+            {**VALID, "audio_enabled": True},
+            {**VALID, "audio_enabled": False, "audio_tracks": [AUDIO_TRACK]},
+        ):
+            with self.subTest(payload=payload), self.assertRaises(DomainError) as raised:
+                validate_composition(payload)
+            self.assertEqual(raised.exception.code, "INVALID_COMPOSITION")
+
+    def test_rejects_invalid_audio_track_identifiers_paths_and_kinds(self):
+        cases = (
+            {**AUDIO_TRACK, "track_id": "../music"},
+            {**AUDIO_TRACK, "blob_ref": "../../etc/passwd"},
+            {**AUDIO_TRACK, "kind": "video"},
+            {**AUDIO_TRACK, "path": "../../etc/passwd"},
+        )
+        for track in cases:
+            with self.subTest(track=track), self.assertRaises(DomainError) as raised:
+                validate_composition({**VALID, "audio_enabled": True, "audio_tracks": [track]})
+            self.assertEqual(raised.exception.code, "INVALID_AUDIO_TRACK")
+
+    def test_rejects_duplicate_track_ids_and_more_than_eight_tracks(self):
+        duplicate = {**AUDIO_TRACK, "track_id": "music1"}
+        with self.assertRaises(DomainError) as raised:
+            validate_composition({**VALID, "audio_enabled": True, "audio_tracks": [AUDIO_TRACK, duplicate]})
+        self.assertEqual(raised.exception.code, "INVALID_AUDIO_TRACK")
+
+        tracks = [{**AUDIO_TRACK, "track_id": f"music{i}"} for i in range(9)]
+        with self.assertRaises(DomainError) as raised:
+            validate_composition({**VALID, "audio_enabled": True, "audio_tracks": tracks})
+        self.assertEqual(raised.exception.code, "AUDIO_TRACK_LIMIT_EXCEEDED")
+
+    def test_rejects_audio_mix_values_outside_pinned_bounds(self):
+        cases = (
+            {**AUDIO_TRACK, "offset_ms": 30_000},
+            {**AUDIO_TRACK, "trim_start_ms": -1},
+            {**AUDIO_TRACK, "trim_start_ms": 20_000, "trim_end_ms": 20_000},
+            {**AUDIO_TRACK, "gain_db": 6.01},
+            {**AUDIO_TRACK, "gain_db": float("nan")},
+            {**AUDIO_TRACK, "fade_in_ms": -1},
+            {**AUDIO_TRACK, "fade_in_ms": 15_000, "fade_out_ms": 5_001},
+        )
+        for track in cases:
+            with self.subTest(track=track), self.assertRaises(DomainError) as raised:
+                validate_composition({**VALID, "audio_enabled": True, "audio_tracks": [track]})
+            self.assertEqual(raised.exception.code, "INVALID_AUDIO_TRACK")
 
 
 if __name__ == "__main__":

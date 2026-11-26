@@ -293,7 +293,10 @@ class JobStore:
         return self.get(job_id)
 
     def write_composition(self, job_id: str, rev: int, value: dict) -> dict:
-        from .composition import MAX_PINNED_ASSET_BYTES, MAX_PROJECT_BYTES, validate_composition
+        from .composition import (
+            MAX_AUDIO_TRACK_BYTES, MAX_PINNED_ASSET_BYTES, MAX_PROJECT_BYTES,
+            validate_audio_library, validate_audio_manifest, validate_composition,
+        )
 
         composition = validate_composition(value)
         with self._lock, self._db() as db:
@@ -310,8 +313,9 @@ class JobStore:
             if any(checkpoint != "preview" for checkpoint in checkpoints):
                 raise DomainError("UNSUPPORTED_CHECKPOINT", "M1 composition supports the preview checkpoint")
 
-            metadata = {key: item for key, item in composition.items() if key not in {"html", "assets"}}
+            metadata = {key: item for key, item in composition.items() if key not in {"html", "assets", "audio_tracks"}}
             asset_blobs = []
+            audio_blobs = []
             asset_refs = composition.get("assets", [])
             if asset_refs:
                 from .assets import AssetStore
@@ -341,6 +345,43 @@ class JobStore:
                     asset_blobs.append((relative_path, data))
                 metadata["assets"] = asset_manifest
 
+            audio_refs = composition.get("audio_tracks", [])
+            if audio_refs:
+                audio_library = validate_audio_library(payload.get("audio_library", []))
+                library_by_ref = {record["blob_ref"]: record for record in audio_library}
+                audio_manifest = []
+                audio_root = self._job_dir(job_id) / "audio_blobs"
+                for reference in audio_refs:
+                    record = library_by_ref.get(reference["blob_ref"])
+                    if (record is None or record["track_id"] != reference["track_id"]
+                            or record["kind"] != reference["kind"]):
+                        raise DomainError("AUDIO_TRACK_NOT_FOUND", reference["track_id"])
+                    blob_path = audio_root / f"{record['blob_ref']}{record['extension']}"
+                    try:
+                        if blob_path.is_symlink() or blob_path.resolve(strict=True) != blob_path:
+                            raise DomainError("AUDIO_INTEGRITY", "audio blob path is not canonical")
+                        data = read_bounded_regular_file(
+                            blob_path, MAX_AUDIO_TRACK_BYTES, error_code="AUDIO_INTEGRITY",
+                        )
+                    except OSError as exc:
+                        raise DomainError("AUDIO_INTEGRITY", "audio blob is missing or unsafe") from exc
+                    if (len(data) != record["size_bytes"]
+                            or hashlib.sha256(data).hexdigest() != record["sha256"]):
+                        raise DomainError("AUDIO_INTEGRITY", "audio blob differs from its imported hash")
+                    relative_path = f"audio/{record['track_id']}{record['extension']}"
+                    pinned = {
+                        **record,
+                        "path": relative_path,
+                        **{key: reference[key] for key in (
+                            "offset_ms", "trim_start_ms", "trim_end_ms", "gain_db", "fade_in_ms", "fade_out_ms",
+                        )},
+                    }
+                    audio_manifest.append(pinned)
+                    audio_blobs.append((relative_path, data))
+                metadata["audio_tracks"] = validate_audio_manifest(
+                    audio_manifest, video_duration_ms=composition["duration_frames"] * 1000 // composition["fps"],
+                )
+
             html_bytes = composition["html"].encode("utf-8")
             project_bytes = json.dumps(metadata, sort_keys=True, allow_nan=False).encode("utf-8")
             if len(project_bytes) > MAX_PROJECT_BYTES:
@@ -362,6 +403,12 @@ class JobStore:
                 source_dir.mkdir(mode=0o700)
                 _write_private_file(source_dir / "index.html", html_bytes)
                 for relative_path, data in asset_blobs:
+                    destination = source_dir / relative_path
+                    destination.parent.mkdir(mode=0o700, exist_ok=True)
+                    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(data)
+                for relative_path, data in audio_blobs:
                     destination = source_dir / relative_path
                     destination.parent.mkdir(mode=0o700, exist_ok=True)
                     fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -423,7 +470,8 @@ class JobStore:
             try:
                 if custom:
                     from .composition import (
-                        MAX_COMPOSITION_BYTES, MAX_PROJECT_BYTES, read_pinned_asset, validate_asset_manifest,
+                        MAX_COMPOSITION_BYTES, MAX_PROJECT_BYTES, read_pinned_asset, read_pinned_audio,
+                        validate_asset_manifest, validate_audio_manifest,
                     )
 
                     old_dir = self._job_dir(job_id) / "revisions" / str(rev)
@@ -457,11 +505,31 @@ class JobStore:
                     asset_manifest = validate_asset_manifest(project_metadata.get("assets", []))
                     asset_blobs = [(record["path"], read_pinned_asset(old_source_dir, record))
                                    for record in asset_manifest]
+                    raw_audio_manifest = project_metadata.get("audio_tracks", [])
+                    if raw_audio_manifest:
+                        if project_metadata.get("audio_enabled") is not True:
+                            raise DomainError("INVALID_SNAPSHOT", "audio manifest is disabled in project metadata")
+                        audio_manifest = validate_audio_manifest(
+                            raw_audio_manifest,
+                            video_duration_ms=project_metadata["duration_frames"] * 1000 // project_metadata["fps"],
+                        )
+                        audio_blobs = [(record["path"], read_pinned_audio(old_source_dir, record))
+                                       for record in audio_manifest]
+                    else:
+                        if project_metadata.get("audio_enabled") is not False:
+                            raise DomainError("INVALID_SNAPSHOT", "audio-enabled project has no pinned tracks")
+                        audio_blobs = []
                     new_source_dir = rev_dir / "composition"
                     new_source_dir.mkdir(mode=0o700)
                     _write_private_file(new_source_dir / "index.html", html_bytes)
                     _write_private_file(rev_dir / "project.json", project_bytes)
                     for relative_path, data in asset_blobs:
+                        destination = new_source_dir / relative_path
+                        destination.parent.mkdir(mode=0o700, exist_ok=True)
+                        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                        with os.fdopen(fd, "wb") as stream:
+                            stream.write(data)
+                    for relative_path, data in audio_blobs:
                         destination = new_source_dir / relative_path
                         destination.parent.mkdir(mode=0o700, exist_ok=True)
                         fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -758,8 +826,11 @@ class JobStore:
             history = [dict(h) for h in db.execute(
                 "SELECT rev, seq, action, from_stage, to_stage, note FROM stage_history WHERE job_id=? ORDER BY seq",
                 (job_id,))]
-            return {"job_id": row["job_id"], "rev": row["rev"], "status": row["status"],
-                    "error": row["error"], "artifacts": arts,
-                    "stage": row["stage"], "origin": row["origin"], "stage_history": history,
-                    "mode": payload.get("mode", "collaborative"),
-                    "requirements": payload.get("requirements", {})}
+            result = {"job_id": row["job_id"], "rev": row["rev"], "status": row["status"],
+                      "error": row["error"], "artifacts": arts,
+                      "stage": row["stage"], "origin": row["origin"], "stage_history": history,
+                      "mode": payload.get("mode", "collaborative"),
+                      "requirements": payload.get("requirements", {})}
+            if "audio_library" in payload:
+                result["audio_library"] = payload["audio_library"]
+            return result
