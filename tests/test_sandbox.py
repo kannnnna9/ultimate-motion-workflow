@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
+from ump_core import sandbox
 from ump_core.jobs import DomainError
 from ump_core.sandbox import (
     cleanup_workspace,
@@ -217,6 +218,66 @@ class SandboxIntegrationTests(unittest.TestCase):
         status, stdout, _ = self._run(source)
         self.assertEqual(status, 0)
         self.assertEqual(stdout.strip(), b"denied")
+
+    def test_asr_runner_can_read_only_pinned_roots_and_cannot_read_secrets_write_outside_or_connect_network(self):
+        runtime_base = Path.home() / ".local" / "share" / "ump-v2" / "asr-runtime"
+        model_base = Path.home() / ".cache" / "ump-v2" / "whisperx"
+        runtime_base.mkdir(parents=True, exist_ok=True, mode=0o700)
+        model_base.mkdir(parents=True, exist_ok=True, mode=0o700)
+        token = uuid.uuid4().hex
+        runtime_root = runtime_base / ("test-" + token)
+        model_root = model_base / ("test-" + token)
+        runtime_root.mkdir(mode=0o700)
+        model_root.mkdir(mode=0o700)
+        runtime_marker = runtime_root / "runtime-marker"
+        model_marker = model_root / "model-marker"
+        sibling_secret = model_base.parent / ("not-model-root-" + token)
+        runtime_marker.write_text("runtime-ok")
+        model_marker.write_text("model-ok")
+        sibling_secret.write_text("secret")
+        try:
+            source = (
+                "import errno,socket,sys,pathlib\n"
+                "runtime,model,secret=sys.argv[1:4]\n"
+                "def denied(action):\n"
+                "  try: action()\n"
+                "  except OSError as e: return e.errno in (errno.EACCES,errno.EPERM,errno.EROFS)\n"
+                "  return False\n"
+                "read_ok=(pathlib.Path(runtime,'runtime-marker').read_text()=='runtime-ok' and pathlib.Path(model,'model-marker').read_text()=='model-ok')\n"
+                "write_denied=denied(lambda:pathlib.Path(runtime,'write-test').write_text('x')) and denied(lambda:pathlib.Path(model,'write-test').write_text('x'))\n"
+                "secret_denied=denied(lambda:pathlib.Path(secret).read_text())\n"
+                "try: socket.socket(socket.AF_INET,socket.SOCK_STREAM)\n"
+                "except OSError as e: network_denied=e.errno in (errno.EAFNOSUPPORT,errno.EPERM)\n"
+                "else: network_denied=False\n"
+                "ok=read_ok and write_denied and secret_denied and network_denied\n"
+                "if not ok: print(f'read={read_ok} write={write_denied} secret={secret_denied} network={network_denied}',file=sys.stderr)\n"
+                "print('asr-boundary-ok' if ok else 'asr-boundary-failed')\n"
+                "sys.exit(0 if ok else 4)\n"
+            )
+            process, unit = sandbox.start_asr_isolated(
+                [sys.executable, "-c", source, str(runtime_root), str(model_root), str(sibling_secret)],
+                workspace=self.workspace,
+                runtime_root=runtime_root,
+                model_root=model_root,
+                timeout_s=10,
+            )
+            status = wait_isolated(process, unit, timeout_s=10)
+            stdout, stderr = process.communicate()
+            self.assertEqual(status, 0, f"stdout={stdout!r} stderr={stderr!r}")
+            self.assertEqual(stdout.strip(), b"asr-boundary-ok")
+            self.assertFalse((runtime_root / "write-test").exists())
+            self.assertFalse((model_root / "write-test").exists())
+            unit_state = subprocess.run(
+                ["sudo", "-n", "systemctl", "--system", "show", unit, "--property=LoadState", "--value"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertTrue(unit_state.returncode != 0 or unit_state.stdout.strip() == "not-found", unit_state.stdout)
+        finally:
+            shutil.rmtree(runtime_root, ignore_errors=True)
+            shutil.rmtree(model_root, ignore_errors=True)
+            sibling_secret.unlink(missing_ok=True)
 
     def test_stdout_preserves_binary_bytes(self):
         process, unit = self._start("import os; os.write(1,b'\\x00\\xff\\x7f')")

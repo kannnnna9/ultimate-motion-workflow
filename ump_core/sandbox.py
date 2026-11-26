@@ -7,6 +7,7 @@ import fcntl
 import math
 import os
 import platform
+import pwd
 import re
 import shutil
 import signal
@@ -24,6 +25,9 @@ CODE_ROOT = Path(__file__).resolve().parents[1]
 SHM_ROOT = Path("/dev/shm").resolve()
 WORKSPACE_PARENT = SHM_ROOT / "ump-v2"
 WORKSPACE_ROOT = WORKSPACE_PARENT / str(os.getuid())
+ASR_USER_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
+ASR_RUNTIME_ROOT = ASR_USER_HOME / ".local" / "share" / "ump-v2" / "asr-runtime"
+ASR_MODEL_ROOT = ASR_USER_HOME / ".cache" / "ump-v2" / "whisperx"
 MAX_RUNTIME_S = 900
 _MEMORY_MAX = "2G"
 _TASKS_MAX = "64"
@@ -176,6 +180,30 @@ def _safe_extra_paths(read_paths: Sequence[str | os.PathLike[str]]) -> list[Path
     return result
 
 
+def _safe_asr_roots(
+    runtime_root: str | os.PathLike[str],
+    model_root: str | os.PathLike[str],
+) -> tuple[Path, Path]:
+    roots = ((Path(runtime_root), ASR_RUNTIME_ROOT), (Path(model_root), ASR_MODEL_ROOT))
+    resolved_roots: list[Path] = []
+    for path, base in roots:
+        try:
+            resolved = path.resolve(strict=True)
+            info = path.lstat()
+        except OSError as exc:
+            raise DomainError("ASR_ROOT_UNAVAILABLE", str(exc)) from exc
+        if not path.is_absolute() or resolved != path or not path.is_relative_to(base):
+            raise DomainError("PATH_OUTSIDE_ROOT", "ASR roots must be canonical descendants of their dedicated roots")
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            raise DomainError("ASR_ROOT_UNAVAILABLE", "ASR roots must be owned real directories")
+        if stat.S_IMODE(info.st_mode) != 0o700:
+            raise DomainError("ASR_ROOT_UNAVAILABLE", "ASR roots must have mode 0700")
+        resolved_roots.append(path)
+    if resolved_roots[0] == resolved_roots[1] or resolved_roots[0].is_relative_to(resolved_roots[1]) or resolved_roots[1].is_relative_to(resolved_roots[0]):
+        raise DomainError("PATH_OUTSIDE_ROOT", "ASR runtime and model roots must be separate")
+    return resolved_roots[0], resolved_roots[1]
+
+
 def _landlock_rules(workspace: Path, read_paths: Sequence[Path], *, private_proc: bool = False) -> dict[Path, int]:
     required = (
         Path("/usr"), Path("/etc"), Path("/sys"),
@@ -261,6 +289,8 @@ def _wrapper_main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--read-path", action="append", default=[])
+    parser.add_argument("--asr-runtime-root")
+    parser.add_argument("--asr-model-root")
     parser.add_argument("--allow-private-proc", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(list(argv))
@@ -271,6 +301,12 @@ def _wrapper_main(argv: Sequence[str]) -> int:
         raise DomainError("INVALID_PAYLOAD", "sandbox command is empty")
     workspace = _validated_workspace(args.workspace)
     read_paths = _safe_extra_paths(args.read_path)
+    if bool(args.asr_runtime_root) != bool(args.asr_model_root):
+        raise DomainError("INVALID_PAYLOAD", "both ASR roots must be supplied together")
+    if args.asr_runtime_root:
+        if not args.allow_private_proc:
+            raise DomainError("ISOLATION_UNAVAILABLE", "ASR roots require a private PID namespace")
+        read_paths.extend(_safe_asr_roots(args.asr_runtime_root, args.asr_model_root))
     if args.allow_private_proc and os.getpid() != 1:
         raise DomainError("ISOLATION_UNAVAILABLE", "proc access requires a private PID namespace")
     os.chdir(workspace)
@@ -279,7 +315,7 @@ def _wrapper_main(argv: Sequence[str]) -> int:
     return 127
 
 
-def _normalize_command(argv: Sequence[str]) -> list[str]:
+def _normalize_command(argv: Sequence[str], *, runtime_root: Path | None = None) -> list[str]:
     if isinstance(argv, (str, bytes)) or not argv:
         raise DomainError("INVALID_PAYLOAD", "command must be a non-empty argument list")
     command = [os.fspath(arg) for arg in argv]
@@ -288,14 +324,18 @@ def _normalize_command(argv: Sequence[str]) -> list[str]:
     executable = shutil.which(command[0]) if not os.path.isabs(command[0]) else command[0]
     if not executable:
         raise DomainError("ISOLATION_UNAVAILABLE", "sandbox executable not found")
-    executable_path = Path(executable).resolve(strict=True)
+    lexical_path = Path(os.path.abspath(executable))
+    executable_path = lexical_path.resolve(strict=True)
     roots = (
         Path("/usr").resolve(), Path(sys.base_prefix).resolve(), CODE_ROOT,
         Path("/opt/google/chrome"), Path("/opt/node/22.22.2"),
     )
+    if runtime_root is not None:
+        roots += (runtime_root,)
     if not any(executable_path == root or root in executable_path.parents for root in roots):
         raise DomainError("PATH_OUTSIDE_ROOT", "sandbox executable is outside approved read roots")
-    command[0] = str(executable_path)
+    # Keep a venv's bin/python path so Python can discover its adjacent pyvenv.cfg.
+    command[0] = str(lexical_path if runtime_root is not None and lexical_path.is_relative_to(runtime_root) else executable_path)
     return command
 
 
@@ -313,6 +353,7 @@ def start_isolated(
     stdin: int = subprocess.DEVNULL,
     timeout_s: float = MAX_RUNTIME_S,
     private_pid_namespace: bool = False,
+    _asr_roots: tuple[Path, Path] | None = None,
 ) -> tuple[subprocess.Popen[bytes], str]:
     timeout = _positive_timeout(timeout_s)
     if stdin not in (subprocess.DEVNULL, subprocess.PIPE):
@@ -321,9 +362,12 @@ def start_isolated(
     if not systemd_run:
         raise DomainError("ISOLATION_UNAVAILABLE", "systemd-run is required")
     work = _validated_workspace(workspace)
-    command = _normalize_command(argv)
+    asr_roots = _safe_asr_roots(*_asr_roots) if _asr_roots is not None else None
+    if asr_roots is not None and not private_pid_namespace:
+        raise DomainError("ISOLATION_UNAVAILABLE", "ASR inference requires a private PID namespace")
+    command = _normalize_command(argv, runtime_root=asr_roots[0] if asr_roots else None)
     extra_paths = _safe_extra_paths(read_paths)
-    unit_prefix = "priv-ump-v2-render-" if private_pid_namespace else "ump-v2-render-"
+    unit_prefix = "priv-ump-v2-asr-" if asr_roots else ("priv-ump-v2-render-" if private_pid_namespace else "ump-v2-render-")
     unit_name = unit_prefix + uuid.uuid4().hex + ".service"
     env_values = {
         "HOME": str(work / "home"),
@@ -336,6 +380,18 @@ def start_isolated(
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
     }
+    if asr_roots:
+        env_values.update({
+            "HF_HOME": str(work / "cache" / "huggingface"),
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "CUDA_VISIBLE_DEVICES": "",
+            "OMP_NUM_THREADS": "2",
+            "MKL_NUM_THREADS": "2",
+            "TOKENIZERS_PARALLELISM": "false",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        })
     if private_pid_namespace:
         sudo = shutil.which("sudo")
         unshare = shutil.which("unshare")
@@ -356,6 +412,8 @@ def start_isolated(
         ]
         for path in extra_paths:
             launch_command.extend(("--read-path", str(path)))
+        if asr_roots:
+            launch_command.extend(("--asr-runtime-root", str(asr_roots[0]), "--asr-model-root", str(asr_roots[1])))
         launch_command.extend(("--", *command))
         unit_command = [sudo, "-n", systemd_run, "--system", "--pipe", "--wait", "--collect", "--quiet", f"--unit={unit_name}"]
     else:
@@ -365,6 +423,8 @@ def start_isolated(
         ]
         for path in extra_paths:
             launch_command.extend(("--read-path", str(path)))
+        if asr_roots:
+            launch_command.extend(("--asr-runtime-root", str(asr_roots[0]), "--asr-model-root", str(asr_roots[1])))
         launch_command.extend(("--", *command))
         unit_command = [systemd_run, "--user", "--pipe", "--wait", "--collect", "--quiet", f"--unit={unit_name}"]
     properties = (
@@ -386,6 +446,24 @@ def start_isolated(
     except OSError as exc:
         raise DomainError("ISOLATION_UNAVAILABLE", f"could not start transient unit: {exc}") from exc
     return process, unit_name
+
+
+def start_asr_isolated(
+    argv: Sequence[str],
+    *,
+    workspace: str | os.PathLike[str],
+    runtime_root: str | os.PathLike[str],
+    model_root: str | os.PathLike[str],
+    timeout_s: float = MAX_RUNTIME_S,
+) -> tuple[subprocess.Popen[bytes], str]:
+    roots = _safe_asr_roots(runtime_root, model_root)
+    return start_isolated(
+        argv,
+        workspace=workspace,
+        timeout_s=timeout_s,
+        private_pid_namespace=True,
+        _asr_roots=roots,
+    )
 
 
 def _stop_unit(unit_name: str) -> None:
