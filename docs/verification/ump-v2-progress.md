@@ -13,6 +13,7 @@
 ## Checklist
 
 - [x] M0 — baseline, backups, isolated branch/data, VM profile, and sandbox/render probe.
+- [x] M0 follow-up — DATA_ROOT aggregate budget, manual preflight, retention, and cleanup gates defined; automatic aggregate enforcement remains explicitly deferred before M4/M5 batches.
 - [x] M1 — custom-composition creative core; T1–T5 verified, including two original outputs, adaptive-skill review, and full browser/sandbox regression gate.
 - [ ] M2 — minimal reusable assets and meaningful articulated motion.
 - [ ] M3 — optional audio, WhisperX timing, and independent subtitles.
@@ -79,7 +80,7 @@ Result: exit 0; 171 tests in 5.058s; `OK (skipped=1)`. The only skip is the brow
 - Actual command path: existing `scripts/record_frames.mjs` captured 30/30 1080×1920 frames at 30 FPS, then FFmpeg encoded H.264 MP4. `ffprobe`: 1080×1920, 30/1, H.264, 1.000 seconds. Decode check found 30 unique frames. Total recorder+encode time: 6.346 seconds; output 117,424 bytes.
 - Contact sheet inspected with vision: all three sampled frames contain intact, visibly changing artwork. This is only a technical abstract shader profile, not a creative-quality benchmark.
 - Evidence lives under `~/.hermes/cache/scratch/ump-v2-isolation-probe/`; not production data.
-- Open before M1 enables arbitrary compositions: implement and test per-job total storage policy (prefer streaming capture to avoid raw PNG accumulation), verify cgroup limit enforcement, and make the sandbox fail closed. No production composition code has been enabled or deployed.
+- M0/M1 storage update (2026-11-26): live root is 50 GiB total, 36 GiB used, 12 GiB free (76%); UMP DATA_ROOT is 23 MiB; `/dev/shm` is 3.8 GiB with 24 KiB used; RAM available 4.8 GiB. Aggregate DATA_ROOT policy is documented in the program plan: 2 GiB soft / 3 GiB hard manual stop thresholds, 5 GiB root reserve, immutable-input/approved-output retention, exact-run quarantine, and no age-only or wildcard deletes. There is no automated aggregate guard yet; add/test one before M4 concurrency or M5 benchmark batches. M1 already enforces a 512 MiB MP4 ceiling and streams capture through bounded private tmpfs without persistent raw PNGs.
 
 ## M1 — Planning and sandbox preflight
 
