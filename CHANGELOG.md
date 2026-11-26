@@ -11,6 +11,8 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 
 ### Changed
 - ASS kini memakai smart line wrapping dalam margin mobile; review frame 360×640 menemukan dan memicu perbaikan untuk baris panjang bahasa Indonesia yang sebelumnya terpotong.
+- Fallback timing dipindah dari `Systran/faster-whisper-tiny` ke `Systran/faster-whisper-small` (revisi terpin, MIT, 486.212.372 B) dan decoder diberi naskah disetujui sebagai konteks prompt. Pada VO Indonesia M3 fallback sekarang `estimated` dengan 42/42 kata dalam 4,9 detik; tiny hanya 33/42 dan memaksa teks malah menggeser ujung `Kejaksaan Agung` sampai −809 ms. Span kata yang tumpang tindih dijepit di tempat, bukan diurutkan ulang, supaya urutan kata yang salah tetap gagal tertutup.
+- Karaoke web menyorot semua kata yang intervalnya aktif pada frame yang sama; kalau kata-kata itu ada di cue berbeda, cue-nya ditumpuk.
 
 ### Security
 - Capture dijalankan tanpa akses jaringan dengan workspace sementara dan allowlist `file:` pada staged composition; akses ke file runtime di luar stage ditolak.
