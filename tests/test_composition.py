@@ -13,6 +13,7 @@ VALID = {
     "duration_frames": 30,
     "audio_enabled": False,
     "subtitles_enabled": False,
+    "subtitle_mode": "none",
 }
 
 
@@ -121,6 +122,35 @@ class CompositionValidationTests(unittest.TestCase):
                 with self.assertRaises(DomainError) as raised:
                     validate_composition(payload)
                 self.assertEqual(raised.exception.code, "INVALID_COMPOSITION")
+
+    def test_m1_subtitle_boolean_normalizes_to_none_mode(self):
+        legacy_payload = {key: value for key, value in VALID.items() if key != "subtitle_mode"}
+        normalized = validate_composition(legacy_payload)
+        self.assertEqual(normalized["subtitle_mode"], "none")
+        self.assertIs(normalized["subtitles_enabled"], False)
+
+    def test_ass_subtitle_mode_requires_voice_audio_and_matching_boolean(self):
+        voice = {**AUDIO_TRACK, "track_id": "voice", "blob_ref": "V" * 16, "kind": "voice"}
+        payload = {
+            **VALID, "audio_enabled": True, "audio_tracks": [voice],
+            "subtitle_mode": "ass", "subtitles_enabled": True,
+        }
+        normalized = validate_composition(payload)
+        self.assertEqual(normalized["subtitle_mode"], "ass")
+        self.assertIs(normalized["subtitles_enabled"], True)
+
+    def test_rejects_ass_without_voice_or_conflicting_mode(self):
+        bed = {**AUDIO_TRACK, "track_id": "bed", "kind": "music"}
+        cases = (
+            {**VALID, "subtitle_mode": "ass", "subtitles_enabled": True},
+            {**VALID, "audio_enabled": True, "audio_tracks": [bed], "subtitle_mode": "ass", "subtitles_enabled": True},
+            {**VALID, "subtitle_mode": "other", "subtitles_enabled": False},
+            {**VALID, "subtitle_mode": "none", "subtitles_enabled": True},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload), self.assertRaises(DomainError) as raised:
+                validate_composition(payload)
+            self.assertEqual(raised.exception.code, "INVALID_COMPOSITION")
 
     def test_accepts_bounded_voice_and_bed_tracks_when_audio_is_explicitly_enabled(self):
         voice = {**AUDIO_TRACK, "track_id": "voice", "blob_ref": "V" * 16, "kind": "voice", "gain_db": 0.0}

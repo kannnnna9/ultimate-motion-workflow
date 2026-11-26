@@ -59,7 +59,8 @@ COMPOSITION_SCHEMA = {
         "fps": {"type": "integer", "const": 30},
         "duration_frames": {"type": "integer", "minimum": 1, "maximum": MAX_DURATION_FRAMES},
         "audio_enabled": {"type": "boolean"},
-        "subtitles_enabled": {"type": "boolean", "const": False},
+        "subtitles_enabled": {"type": "boolean"},
+        "subtitle_mode": {"type": "string", "enum": ["none", "ass"]},
         "assets": {
             "type": "array",
             "maxItems": _MAX_ASSET_REFERENCES,
@@ -148,7 +149,7 @@ def validate_audio_track_references(value: object, *, video_duration_ms: int) ->
 
 def validate_composition(value: object) -> dict:
     if (not isinstance(value, dict) or not _COMPOSITION_FIELDS <= value.keys()
-            or value.keys() - (_COMPOSITION_FIELDS | {"assets", "audio_tracks"})):
+            or value.keys() - (_COMPOSITION_FIELDS | {"assets", "audio_tracks", "subtitle_mode"})):
         raise DomainError("INVALID_COMPOSITION", "expected only HTML and pinned composition metadata")
 
     html = value["html"]
@@ -180,8 +181,19 @@ def validate_composition(value: object) -> dict:
     audio_enabled = value["audio_enabled"]
     if type(audio_enabled) is not bool:
         raise DomainError("INVALID_COMPOSITION", "audio_enabled must be boolean")
-    if type(value["subtitles_enabled"]) is not bool or value["subtitles_enabled"] is not False:
-        raise DomainError("INVALID_COMPOSITION", "subtitles_enabled must be false until subtitle wiring")
+    subtitle_enabled = value["subtitles_enabled"]
+    if type(subtitle_enabled) is not bool:
+        raise DomainError("INVALID_COMPOSITION", "subtitles_enabled must be boolean")
+    if "subtitle_mode" not in value:
+        if subtitle_enabled:
+            raise DomainError("INVALID_COMPOSITION", "subtitle_mode is required when subtitles are enabled")
+        subtitle_mode = "none"
+    else:
+        subtitle_mode = value["subtitle_mode"]
+        if not isinstance(subtitle_mode, str) or subtitle_mode not in {"none", "ass"}:
+            raise DomainError("INVALID_COMPOSITION", "subtitle_mode must be none or ass")
+        if subtitle_enabled is not (subtitle_mode == "ass"):
+            raise DomainError("INVALID_COMPOSITION", "subtitles_enabled must match subtitle_mode")
     video_duration_ms = frames * 1000 // 30
     raw_audio_tracks = value.get("audio_tracks", [])
     if not audio_enabled:
@@ -194,6 +206,8 @@ def validate_composition(value: object) -> dict:
         audio_refs = validate_audio_track_references(
             raw_audio_tracks, video_duration_ms=video_duration_ms,
         )
+    if subtitle_mode == "ass" and (not audio_enabled or not any(track["kind"] == "voice" for track in audio_refs)):
+        raise DomainError("INVALID_COMPOSITION", "ASS subtitles require a voice audio track")
 
     assets = value.get("assets", [])
     if not isinstance(assets, list) or len(assets) > _MAX_ASSET_REFERENCES:
@@ -214,6 +228,7 @@ def validate_composition(value: object) -> dict:
     result = {key: value[key] for key in (
         "html", "width", "height", "fps", "duration_frames", "audio_enabled", "subtitles_enabled"
     )}
+    result["subtitle_mode"] = subtitle_mode
     if asset_refs:
         result["assets"] = asset_refs
     if audio_refs:

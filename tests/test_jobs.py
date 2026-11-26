@@ -386,9 +386,9 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual((revised["rev"], revised["stage"]), (3, "composition_draft"))
         revision_dir = self.root / "jobs" / job["job_id"] / "revisions" / "3"
         self.assertEqual((revision_dir / "composition" / "index.html").read_text(encoding="utf-8"), composition["html"])
-        self.assertEqual(json.loads((revision_dir / "project.json").read_text(encoding="utf-8")), {
-            key: value for key, value in composition.items() if key != "html"
-        })
+        expected_project = {key: value for key, value in composition.items() if key != "html"}
+        expected_project["subtitle_mode"] = "none"
+        self.assertEqual(json.loads((revision_dir / "project.json").read_text(encoding="utf-8")), expected_project)
 
     def test_metadata_revision_rejects_tampered_composition_html(self):
         job = self.store.create("tampered HTML revision", mode="autonomous")
@@ -741,6 +741,7 @@ class JobStoreTests(unittest.TestCase):
         first_dir = self.root / "jobs" / job["job_id"] / "revisions" / "2"
         first_html = first_dir / "composition" / "index.html"
         project = {key: value for key, value in composition.items() if key != "html"}
+        project["subtitle_mode"] = "none"
         self.assertEqual(first_html.read_text(encoding="utf-8"), composition["html"])
         self.assertEqual(json.loads((first_dir / "project.json").read_text(encoding="utf-8")), project)
         snapshot = json.loads((first_dir / "input.json").read_text(encoding="utf-8"))
