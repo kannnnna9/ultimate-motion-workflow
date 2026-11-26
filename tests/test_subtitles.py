@@ -47,6 +47,18 @@ class SubtitleRendererTests(unittest.TestCase):
         )
         self.assertTrue(decoded.endswith("\n"))
 
+    def test_long_mobile_cue_uses_smart_wrapping_with_safe_margins(self):
+        words = [
+            {"id": f"w{i}", "text": text, "start_ms": 10900 + i * 100,
+             "end_ms": 10990 + i * 100, "speaker_id": None, "timing_status": "aligned"}
+            for i, text in enumerate(("dengan", "pemberhentian", "di", "Halte", "Kejaksaan"))
+        ]
+        decoded = self.render(
+            speech_timeline(duration_ms=18000, words=words), track_duration_ms=18000,
+        ).decode("utf-8")
+        self.assertIn("WrapStyle:0", decoded)
+        self.assertIn(",64,64,230,1", decoded)
+
     def test_none_mode_returns_no_subtitle_artifact(self):
         self.assertIsNone(render_subtitles("none", None, None))
 
