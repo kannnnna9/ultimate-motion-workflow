@@ -1,6 +1,6 @@
 # ledger — plan: docs/ultra/plans/2026-11-26-ump-v2.0-m2-assets.md
 
-- Task 1: in progress — bounded asset catalogue, SVG authoring, PNG/JPEG import, tool schema/dispatch, and owned Telegram-cache reader implemented. Final targeted suites: `test_assets.py` 30/30, `test_composition_tools.py` 9/9, `test_storyboard.py` 8/8; compileall and diff-check pass. Review-fix pass covers escaped CSS URLs, declared SVG bounds, PNG/JPEG structure, catalogue invariants, blob integrity, lock metadata revisions, crash recovery, and the 128 MiB/256-version cap; awaiting task commit and final checklist.
+- Task 1: complete (commit `58683e0`; tests: `test_assets.py` 30/30 + `test_composition_tools.py` 9/9 + `test_storyboard.py` 8/8 → PASS; compileall and `git diff --check` → PASS).
 - Task 2: pending
 - Task 3: pending
 - Task 4: pending
