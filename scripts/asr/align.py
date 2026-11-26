@@ -252,7 +252,18 @@ def _provider_words_whisperx(audio_path: Path, transcript: str, model_dir: Path,
     return result
 
 
-def _provider_words_faster_whisper(audio_path: Path, model_dir: Path) -> list[dict[str, Any]]:
+def _provider_words_faster_whisper(
+    audio_path: Path,
+    model_dir: Path,
+    transcript: str,
+) -> list[dict[str, Any]]:
+    """Decode with the approved narration as the prompt context.
+
+    The prompt carries the approved words only as decoder context, so a small offline
+    model pronounces proper names instead of inventing syllables. Text from the result
+    is still compared token for token against the approved transcript by
+    ``normalize_provider_timeline``; this function never rewrites approved words.
+    """
     from faster_whisper import WhisperModel
 
     model = WhisperModel(
@@ -270,6 +281,8 @@ def _provider_words_faster_whisper(audio_path: Path, model_dir: Path) -> list[di
         vad_filter=False,
         beam_size=5,
         best_of=1,
+        initial_prompt=transcript,
+        condition_on_previous_text=False,
     )
     result = []
     for segment in segments:
@@ -330,7 +343,7 @@ def run_provider(
     if provider == "whisperx":
         words = _provider_words_whisperx(audio_path, transcript, model_dir, duration_ms)
     else:
-        words = _provider_words_faster_whisper(audio_path, model_dir)
+        words = _provider_words_faster_whisper(audio_path, model_dir, transcript)
     return normalize_provider_timeline(
         transcript,
         words,

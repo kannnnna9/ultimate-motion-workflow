@@ -162,6 +162,30 @@ def validate_speech_timeline(
     return result
 
 
+def _clamp_word_spans(recognized_words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep decoder spans monotonic and non-overlapping without reordering the words.
+
+    Decoders occasionally emit a word whose span starts before its predecessor ends, which
+    would make the transcript's timing fail validation without any authoring mistake. Only
+    span boundaries move here; text, speaker, score, and word order stay exactly as
+    recognized, so a genuinely misordered transcript still fails the token comparison
+    instead of being silently resequenced into a plausible-looking result.
+    """
+
+    last_start: int | None = None
+    last_end = 0
+    for word in recognized_words:
+        if last_start is not None and word["start_ms"] < last_start:
+            word["start_ms"] = last_start
+        if word["start_ms"] < last_end:
+            word["start_ms"] = last_end
+        if word["start_ms"] >= word["end_ms"]:
+            word["end_ms"] = word["start_ms"] + 1
+        last_start = word["start_ms"]
+        last_end = word["end_ms"]
+    return recognized_words
+
+
 def normalize_provider_timeline(
     approved_text: str,
     provider_words: Sequence[Mapping[str, Any]],
@@ -202,6 +226,7 @@ def normalize_provider_timeline(
             item["score"] = word["score"]
         recognized_words.append(item)
     recognized_text = " ".join(word["text"] for word in recognized_words)
+    recognized_words = _clamp_word_spans(recognized_words)
     _validate_words(recognized_words, duration_ms, "recognized_words")
 
     def token_key(token: str) -> str:

@@ -218,8 +218,8 @@ class SpeechTimelineTests(unittest.TestCase):
             audio_sha256=AUDIO_SHA256,
             duration_ms=5000,
             provider="faster-whisper",
-            model_id="Systran/faster-whisper-tiny",
-            model_revision="d90ca5fe260221311c53c58e660288d3deb8d356",
+            model_id="Systran/faster-whisper-small",
+            model_revision="536b0662742c02347bc0e980a01041f333bce120",
             timing_status="estimated",
         )
         self.assertEqual(result["status"], "unresolved")
@@ -257,6 +257,56 @@ class SpeechTimelineTests(unittest.TestCase):
             with self.subTest(specs=specs), self.assertRaises(ValueError):
                 resolve_speech_anchors(valid_timeline(), specs, video_duration_ms=4000)
 class AlignRunnerHelperTests(unittest.TestCase):
+    def test_overlapping_provider_spans_are_clamped_in_place_before_matching(self):
+        result = normalize_provider_timeline(
+            "Dari Blok M Cakra Selaras",
+            [
+                {"text": "Dari", "start_ms": 2000, "end_ms": 2400},
+                {"text": "Blok", "start_ms": 2400, "end_ms": 2600},
+                {"text": "M", "start_ms": 2600, "end_ms": 3000},
+                {"text": "Cakra", "start_ms": 2900, "end_ms": 3300},
+                {"text": "Selaras", "start_ms": 3300, "end_ms": 3700},
+            ],
+            audio_sha256=AUDIO_SHA256,
+            duration_ms=5000,
+            provider="faster-whisper",
+            model_id="Systran/faster-whisper-small",
+            model_revision="536b0662742c02347bc0e980a01041f333bce120",
+            timing_status="estimated",
+        )
+        self.assertEqual(result["status"], "estimated")
+        self.assertEqual([word["text"] for word in result["words"]], ["Dari", "Blok", "M", "Cakra", "Selaras"])
+        spans = [(word["start_ms"], word["end_ms"]) for word in result["words"]]
+        self.assertEqual(spans[0], (2000, 2400))
+        self.assertEqual(spans[3], (3000, 3300))
+        for (start, end), (next_start, _) in zip(spans, spans[1:]):
+            self.assertLess(start, end)
+            self.assertLessEqual(end, next_start)
+
+    def test_out_of_order_words_are_never_resequenced_into_a_match(self):
+        result = normalize_provider_timeline(
+            "Dari Blok M",
+            [
+                {"text": "Blok", "start_ms": 2600, "end_ms": 2800},
+                {"text": "Dari", "start_ms": 2000, "end_ms": 2400},
+                {"text": "M", "start_ms": 2820, "end_ms": 3000},
+            ],
+            audio_sha256=AUDIO_SHA256,
+            duration_ms=5000,
+            provider="faster-whisper",
+            model_id="Systran/faster-whisper-small",
+            model_revision="536b0662742c02347bc0e980a01041f333bce120",
+            timing_status="estimated",
+        )
+        self.assertEqual(result["status"], "unresolved")
+        self.assertEqual(result["reason"], "transcript_mismatch")
+        self.assertEqual(result["words"], [])
+        self.assertEqual(
+            [word["text"] for word in result["recognized_words"]],
+            ["Blok", "Dari", "M"],
+            "clamping may move spans but must never reorder recognized words",
+        )
+
     def test_flatten_transcript_preserves_approved_word_surfaces(self):
         transcript = flatten_transcript(
             {
@@ -464,7 +514,7 @@ class RealSpeechProviderIntegrationTests(unittest.TestCase):
                 self.assertEqual(timeline["audio_sha256"], audio_sha256)
                 self.assertEqual(timeline["approved_transcript"], approved)
                 self.assertEqual(timeline["duration_ms"], 17952)
-                self.assertEqual(timeline["model_revision"], "ce6da00000a403c7cf3857197f4132439667e8f0" if provider == "whisperx" else "d90ca5fe260221311c53c58e660288d3deb8d356")
+                self.assertEqual(timeline["model_revision"], "ce6da00000a403c7cf3857197f4132439667e8f0" if provider == "whisperx" else "536b0662742c02347bc0e980a01041f333bce120")
                 validated = validate_speech_timeline(timeline, audio_sha256=audio_sha256, duration_ms=17952)
                 self.assertTrue(validated["metrics"]["wall_seconds"] > 0)
                 self.assertTrue(validated["metrics"]["max_rss_kib"] > 0)
