@@ -497,7 +497,7 @@ def _tail_text(buffer, workspace):
 
 
 def _needs_speech_timing(project):
-    return project.get('subtitle_mode', 'none') == 'ass' or bool(project.get('speech_anchors', []))
+    return project.get('subtitle_mode', 'none') in {'ass', 'web'} or bool(project.get('speech_anchors', []))
 
 
 def _quantize_speech_anchors(anchors, *, duration_frames, fps=30):
@@ -649,6 +649,20 @@ def _write_custom_subtitle(workspace, timeline, voice_track):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'wb') as stream:
         stream.write(subtitle_bytes)
+    return path, subtitle_bytes
+
+
+def _write_custom_karaoke(workspace, timeline, voice_track):
+    from .subtitles import render_karaoke_subtitles
+
+    try:
+        subtitle_bytes = render_karaoke_subtitles(
+            timeline, audio_sha256=voice_track['sha256'],
+            track_duration_ms=voice_track['duration_ms'], width=1080, height=1920,
+        )
+    except ValueError as exc:
+        raise DomainError('INVALID_SUBTITLE', str(exc)) from exc
+    path = _write_private_bytes(workspace / 'subtitles.json', subtitle_bytes)
     return path, subtitle_bytes
 
 
@@ -831,6 +845,8 @@ def _render_custom(store, run, directory, deadline):
         naskah_bytes = None
         subtitle_bytes = None
         subtitle_path = None
+        karaoke_bytes = None
+        karaoke_path = None
         voice_record = voice_tracks[0] if needs_timing else None
         if needs_timing:
             if voice_record is None:
@@ -864,6 +880,8 @@ def _render_custom(store, run, directory, deadline):
             speech_timeline_path = _write_private_bytes(workspace / 'speech_timeline.json', speech_timeline_bytes)
             if validated['subtitle_mode'] == 'ass':
                 subtitle_path, subtitle_bytes = _write_custom_subtitle(workspace, timeline, voice_record)
+            elif validated['subtitle_mode'] == 'web':
+                karaoke_path, karaoke_bytes = _write_custom_karaoke(workspace, timeline, voice_record)
 
         work_video = workspace / 'preview.partial.mp4'
         ffmpeg_argv = [
@@ -888,6 +906,8 @@ def _render_custom(store, run, directory, deadline):
         recorder = ['node', str(CODE_ROOT / 'scripts' / 'record_custom.mjs'), str(staged_html), str(staged_project)]
         if timing_path is not None:
             recorder.append(str(timing_path))
+        if karaoke_path is not None:
+            recorder.append(str(karaoke_path))
         node_process, node_unit = sandbox.start_isolated(
             recorder, workspace=workspace, timeout_s=_remaining_seconds(deadline),
             private_pid_namespace=True,
@@ -978,6 +998,8 @@ def _render_custom(store, run, directory, deadline):
             bundle_files['speech_timeline.json'] = speech_timeline_bytes
         if subtitle_bytes is not None:
             bundle_files['subtitles.ass'] = subtitle_bytes
+        if karaoke_bytes is not None:
+            bundle_files['subtitles.json'] = karaoke_bytes
         manifest = {
             'schema_version': 1,
             'files': {
@@ -1011,6 +1033,12 @@ def _render_custom(store, run, directory, deadline):
                 max_bytes=4 * 1024 * 1024,
             )
             additional_artifacts['subtitles'] = 'subtitles.ass'
+        elif karaoke_path is not None:
+            _copy_regular_output(
+                karaoke_path, directory / 'subtitles.json', workspace=workspace,
+                max_bytes=4 * 1024 * 1024,
+            )
+            additional_artifacts['subtitles'] = 'subtitles.json'
         return partial, additional_artifacts
     finally:
         if ffmpeg_process is not None and ffmpeg_process.stdin is not None:

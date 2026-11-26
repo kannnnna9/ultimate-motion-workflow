@@ -75,10 +75,11 @@ class WorkerAudioContractTests(unittest.TestCase):
         self.assertIn("apad=whole_dur=2.000000000", joined)
         self.assertIn("-t 2.000000000", joined)
 
-    def test_timing_is_required_only_for_ass_or_visual_anchors(self):
+    def test_timing_is_required_for_ass_web_or_visual_anchors(self):
         self.assertFalse(worker._needs_speech_timing({"subtitle_mode": "none", "speech_anchors": []}))
         self.assertFalse(worker._needs_speech_timing({"subtitle_mode": "none", "speech_anchors": [], "audio_enabled": True}))
         self.assertTrue(worker._needs_speech_timing({"subtitle_mode": "ass", "speech_anchors": []}))
+        self.assertTrue(worker._needs_speech_timing({"subtitle_mode": "web", "speech_anchors": []}))
         self.assertTrue(worker._needs_speech_timing({"subtitle_mode": "none", "speech_anchors": [{"id": "a"}]}))
 
     def test_mux_filtergraph_applies_trim_gain_fades_offset_and_exact_duration(self):

@@ -17,6 +17,7 @@ from unittest.mock import patch
 from ump_core import sandbox, worker
 from ump_core.assets import AssetStore
 from ump_core.jobs import JobStore
+from ump_core.subtitles import render_karaoke_subtitles
 from ump_core.tools import _artifact
 
 
@@ -98,6 +99,7 @@ def _project(duration_frames=30):
         "audio_enabled": False,
         "subtitles_enabled": False,
         "subtitle_mode": "none",
+        "subtitle_effect": None,
         "draws_speech_text": False,
         "speech_anchors": [],
     }
@@ -152,9 +154,9 @@ def _speech_naskah():
     return {"beats": [{"id": "b1", "narration": "Cakra Selaras Wahana."}]}
 
 
-def _new_approved_naskah_job(store, brief="speech render"):
+def _new_approved_naskah_job(store, brief="speech render", naskah=None):
     job = store.create(brief, mode="autonomous")
-    revised = store.revise(job["job_id"], job["rev"], {"naskah": _speech_naskah()})
+    revised = store.revise(job["job_id"], job["rev"], {"naskah": naskah or _speech_naskah()})
     store.set_stage(job["job_id"], revised["rev"], "naskah_approved")
     return job["job_id"], revised["rev"]
 
@@ -175,6 +177,32 @@ def _speech_timeline(audio_sha256, duration_ms=1000):
     }
 
 
+def _karaoke_timeline(audio_sha256, duration_ms, words):
+    recognized = " ".join(word["text"] for word in words)
+    timeline = _speech_timeline(audio_sha256, duration_ms)
+    timeline.update({
+        "duration_ms": duration_ms,
+        "words": words,
+        "approved_transcript": recognized,
+        "recognized_text": recognized,
+    })
+    return timeline
+
+
+def _karaoke_project(audio_sha256, duration_ms, duration_frames):
+    return {
+        **_project(duration_frames),
+        "audio_enabled": True,
+        "subtitles_enabled": True,
+        "subtitle_mode": "web",
+        "subtitle_effect": "karaoke",
+        "audio_tracks": [{
+            "track_id": "voice", "kind": "voice", "sha256": audio_sha256,
+            "duration_ms": duration_ms,
+        }],
+    }
+
+
 def _voice_composition(html, record, *, mode="ass", draws_speech_text=False, anchors=None):
     return {
         "html": html,
@@ -186,7 +214,8 @@ def _voice_composition(html, record, *, mode="ass", draws_speech_text=False, anc
             "gain_db": 0.0, "fade_in_ms": 0, "fade_out_ms": 0,
         }],
         "subtitle_mode": mode,
-        "subtitles_enabled": mode == "ass",
+        "subtitle_effect": "karaoke" if mode == "web" else None,
+        "subtitles_enabled": mode != "none",
         "draws_speech_text": draws_speech_text,
         "speech_anchors": anchors or [],
     }
@@ -201,6 +230,38 @@ def _frame_pixel(video, frame_index, x, y):
     ).stdout
     offset = (y * 1080 + x) * 3
     return tuple(selected[offset:offset + 3])
+
+
+def _png_rgb_bytes(png):
+    return subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(png),
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+        check=True, capture_output=True, timeout=30,
+    ).stdout
+
+
+def _frame_rgb_bytes(video, frame_index):
+    return subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video),
+         "-vf", f"select=eq(n\\,{frame_index})", "-vsync", "0", "-frames:v", "1",
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+        check=True, capture_output=True, timeout=30,
+    ).stdout
+
+
+def _orange_bounds(rgb):
+    points = []
+    for offset in range(0, len(rgb), 3):
+        red, green, blue = rgb[offset:offset + 3]
+        if red > 180 and 50 < green < 180 and blue < 145 and red > green + 50:
+            pixel = offset // 3
+            points.append((pixel % 1080, pixel // 1080))
+    if not points:
+        return None
+    return (
+        min(point[0] for point in points), max(point[0] for point in points),
+        min(point[1] for point in points), max(point[1] for point in points),
+    )
 
 
 @unittest.skipUnless(ENABLED, "set UMP_BROWSER=1 UMP_SANDBOX_TESTS=1 for browser renderer integration tests")
@@ -252,6 +313,142 @@ class CustomRendererTests(unittest.TestCase):
             decoded.append(result.stdout)
         self.assertEqual(decoded[0], decoded[3], "rewinding to 0.5s must restore identical pixels")
         self.assertNotEqual(decoded[0], decoded[1], "the scene must visibly change between 0.5s and 0s")
+
+    def _probe_karaoke(self, timeline, subtitle_bytes, frame_numbers, *, subtitle_location="inside", html=None):
+        workspace = sandbox.create_workspace("k" + uuid.uuid4().hex[:8])
+        self.addCleanup(lambda: sandbox.cleanup_workspace(workspace) if workspace.exists() else None)
+        composition = workspace / "composition"
+        composition.mkdir(mode=0o700)
+        source = composition / "index.html"
+        duration_frames = max(max(frame_numbers) + 1, math.ceil(timeline["duration_ms"] * 30 / 1000))
+        source.write_text(html or _speech_scene(duration_frames=duration_frames), encoding="utf-8")
+        project = workspace / "project.json"
+        project.write_text(json.dumps(_karaoke_project(
+            timeline["audio_sha256"], timeline["duration_ms"], duration_frames,
+        )), encoding="utf-8")
+        timing = workspace / "timing.json"
+        timing.write_text(json.dumps({
+            "audio_sha256": timeline["audio_sha256"],
+            "words": timeline["words"],
+            "anchors": [],
+        }), encoding="utf-8")
+        subtitle_arg = None
+        if subtitle_location == "inside":
+            subtitle = workspace / "subtitles.json"
+            if subtitle_bytes is not None:
+                subtitle.write_bytes(subtitle_bytes)
+                subtitle_arg = str(subtitle)
+        elif subtitle_location == "outside":
+            subtitle = self.root / "outside-subtitles.json"
+            subtitle.write_bytes(subtitle_bytes or b"")
+            subtitle_arg = str(subtitle)
+        output = workspace / "probes"
+        times = ",".join(str(frame / 30) for frame in frame_numbers)
+        command = [
+            "node", str(ROOT / "scripts" / "record_custom.mjs"), "--probe-seeks",
+            str(source), str(project), str(output), times, str(timing),
+        ]
+        if subtitle_arg is not None:
+            command.append(subtitle_arg)
+        process, unit = sandbox.start_isolated(
+            command, workspace=workspace, private_pid_namespace=True, timeout_s=60,
+        )
+        status = sandbox.wait_isolated(process, unit, timeout_s=30)
+        stdout, stderr = process.communicate()
+        return status, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace"), output
+
+    def test_web_karaoke_tracks_word_color_and_is_deterministic_under_reverse_seeks(self):
+        audio_sha256 = "a" * 64
+        words = [
+            {"id": "w00001", "text": "Cakra", "start_ms": 100, "end_ms": 200, "speaker_id": None, "timing_status": "aligned"},
+            {"id": "w00002", "text": "Selaras", "start_ms": 250, "end_ms": 350, "speaker_id": None, "timing_status": "aligned"},
+            {"id": "w00003", "text": "Wahana", "start_ms": 400, "end_ms": 500, "speaker_id": None, "timing_status": "aligned"},
+            {"id": "w00004", "text": "Pagi", "start_ms": 600, "end_ms": 800, "speaker_id": None, "timing_status": "aligned"},
+        ]
+        timeline = _karaoke_timeline(audio_sha256, 1000, words)
+        subtitle_bytes = render_karaoke_subtitles(
+            timeline, audio_sha256=audio_sha256, track_duration_ms=1000,
+        )
+        frames = [2, 3, 4, 6, 8, 10, 11, 12, 13, 15, 18, 23, 24, 8, 3]
+        status, stdout, stderr, output = self._probe_karaoke(timeline, subtitle_bytes, frames)
+        self.assertEqual(status, 0, stderr)
+        report = json.loads(stdout)
+        self.assertEqual(report["frames"], len(frames))
+        self.assertEqual(report["karaoke"], {"overlay_count": 1, "closed_shadow_root": True})
+        pngs = sorted(output.glob("seek-*.png"))
+        self.assertEqual(len(pngs), len(frames))
+        rgb = [_png_rgb_bytes(png) for png in pngs]
+        bounds = [_orange_bounds(frame) for frame in rgb]
+        for index in (0, 3, 6, 9, 12):
+            self.assertIsNone(bounds[index], f"frame {frames[index]} should have no active word")
+        active = [bounds[index] for index in (1, 4, 7, 10)]
+        self.assertTrue(all(item is not None for item in active))
+        centers = [(item[0] + item[1]) / 2 for item in active if item is not None]
+        self.assertEqual(len(centers), 4)
+        self.assertTrue(all(left < right for left, right in zip(centers, centers[1:])),
+                        "highlight must move strictly forward through the phrase")
+        self.assertEqual(rgb[4], rgb[13], "seeking back to word two must restore identical pixels")
+        self.assertEqual(rgb[1], rgb[14], "seeking back to word one must restore identical pixels")
+
+    def test_web_karaoke_does_not_open_external_network_routes(self):
+        audio_sha256 = "d" * 64
+        words = [{"id": "w00001", "text": "Cakra", "start_ms": 100, "end_ms": 500,
+                  "speaker_id": None, "timing_status": "aligned"}]
+        timeline = _karaoke_timeline(audio_sha256, 1000, words)
+        subtitle_bytes = render_karaoke_subtitles(timeline, audio_sha256=audio_sha256, track_duration_ms=1000)
+        html = _speech_scene().replace(
+            "async ready(){this.readyCalled=true;",
+            "async ready(){fetch('https://example.invalid/karaoke.png');this.readyCalled=true;",
+        )
+        status, _stdout, stderr, output = self._probe_karaoke(
+            timeline, subtitle_bytes, [3], html=html,
+        )
+        self.assertNotEqual(status, 0)
+        self.assertIn("external request blocked", stderr.lower())
+        self.assertFalse(list(output.glob("seek-*.png")))
+
+    def test_web_karaoke_holds_previous_word_for_subframe_gap(self):
+        audio_sha256 = "b" * 64
+        words = [
+            {"id": "w00001", "text": "Kejaksaan", "start_ms": 13700, "end_ms": 13900, "speaker_id": None, "timing_status": "aligned"},
+            {"id": "w00002", "text": "Agung.", "start_ms": 14000, "end_ms": 14049, "speaker_id": None, "timing_status": "aligned"},
+            {"id": "w00003", "text": "Di", "start_ms": 14069, "end_ms": 14180, "speaker_id": None, "timing_status": "aligned"},
+        ]
+        timeline = _karaoke_timeline(audio_sha256, 15000, words)
+        subtitle_bytes = render_karaoke_subtitles(
+            timeline, audio_sha256=audio_sha256, track_duration_ms=15000,
+        )
+        status, stdout, stderr, output = self._probe_karaoke(
+            timeline, subtitle_bytes, [421, 422, 423, 422, 421],
+        )
+        self.assertEqual(status, 0, stderr)
+        self.assertEqual(json.loads(stdout)["frames"], 5)
+        pngs = sorted(output.glob("seek-*.png"))
+        rgb = [_png_rgb_bytes(png) for png in pngs]
+        self.assertEqual(rgb[0], rgb[1], "frame 422 must hold Agung through the 20 ms gap")
+        self.assertNotEqual(rgb[1], rgb[2], "frame 423 is the first sampled frame for Di")
+        self.assertEqual(rgb[1], rgb[3], "reverse seek to frame 422 must preserve the held word")
+        self.assertEqual(rgb[0], rgb[4], "repeat seek to frame 421 must be pixel-identical")
+
+    def test_web_karaoke_rejects_missing_corrupt_and_outside_subtitle_json(self):
+        audio_sha256 = "c" * 64
+        words = [{"id": "w00001", "text": "Cakra", "start_ms": 100, "end_ms": 500,
+                  "speaker_id": None, "timing_status": "aligned"}]
+        timeline = _karaoke_timeline(audio_sha256, 1000, words)
+        valid = render_karaoke_subtitles(timeline, audio_sha256=audio_sha256, track_duration_ms=1000)
+        cases = [
+            ("missing", None, "inside", "karaoke subtitle json is required"),
+            ("corrupt", b"{broken", "inside", "invalid karaoke subtitle json"),
+            ("outside", valid, "outside", "private workspace"),
+        ]
+        for name, payload, location, expected in cases:
+            with self.subTest(name=name):
+                status, _stdout, stderr, output = self._probe_karaoke(
+                    timeline, payload, [3], subtitle_location=location,
+                )
+                self.assertNotEqual(status, 0)
+                self.assertIn(expected, stderr.lower())
+                self.assertFalse(output.exists() or list(output.glob("seek-*.png")))
 
     def test_sandbox_stdin_pipe_preserves_binary_bytes(self):
         workspace = sandbox.create_workspace("p" + uuid.uuid4().hex[:8])
@@ -457,6 +654,99 @@ class CustomRendererTests(unittest.TestCase):
             self.assertIn("audio/bed.wav", archive.namelist())
             self.assertIn("speech_timeline.json", archive.namelist())
             self.assertIn("subtitles.ass", archive.namelist())
+
+    def test_voice_web_karaoke_registers_hashed_json_without_ass_burn(self):
+        naskah = {"beats": [{"id": "b1", "narration": "Cakra Selaras Wahana Pagi."}]}
+        job_id, rev = _new_approved_naskah_job(self.store, naskah=naskah)
+        voice_bytes = _wav_bytes()
+        record, rev = _store_audio_blob(self.store, job_id, "voice", "voice", voice_bytes)
+        composition = _voice_composition(_speech_scene(), record, mode="web")
+        created = self.store.write_composition(job_id, rev, composition)
+        run = self.store.claim(job_id, created["rev"], "preview")
+        words = [
+            {"id": "w00001", "text": "Cakra", "start_ms": 100, "end_ms": 200, "speaker_id": None, "timing_status": "aligned"},
+            {"id": "w00002", "text": "Selaras", "start_ms": 250, "end_ms": 350, "speaker_id": None, "timing_status": "aligned"},
+            {"id": "w00003", "text": "Wahana", "start_ms": 400, "end_ms": 500, "speaker_id": None, "timing_status": "aligned"},
+            {"id": "w00004", "text": "Pagi.", "start_ms": 600, "end_ms": 800, "speaker_id": None, "timing_status": "aligned"},
+        ]
+        timeline = _karaoke_timeline(record["sha256"], record["duration_ms"], words)
+        expected_sidecar = render_karaoke_subtitles(
+            timeline, audio_sha256=record["sha256"], track_duration_ms=record["duration_ms"],
+        )
+        with (
+            patch.object(worker, "_run_alignment", return_value=timeline) as alignment,
+            patch.object(worker, "_build_custom_mux_argv", wraps=worker._build_custom_mux_argv) as mux_builder,
+        ):
+            result = worker.execute_run(self.store, run["run_id"])
+        self.assertEqual(result["status"], "finished", result.get("error"))
+        alignment.assert_called_once()
+        mux_builder.assert_called_once()
+        mux_call = mux_builder.call_args
+        if mux_call is None:
+            self.fail("audio mux builder was not called")
+        self.assertIsNone(mux_call.kwargs.get("subtitle_filename"))
+        artifacts = self.store.get(job_id)["artifacts"]
+        self.assertEqual([item["kind"] for item in artifacts].count("subtitles"), 1)
+        resolved = {item["kind"]: Path(_artifact(self.store, job_id, item["id"])["path"])
+                    for item in artifacts}
+        subtitle_path = resolved["subtitles"]
+        source_path = resolved["source"]
+        self.assertEqual(subtitle_path.name, "subtitles.json")
+        self.assertEqual(subtitle_path.read_bytes(), expected_sidecar)
+        self.assertFalse((self.root / "runs" / run["run_id"] / "subtitles.ass").exists())
+        info = json.loads(subprocess.check_output([
+            "ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(resolved["preview"])
+        ]))
+        self.assertEqual({stream["codec_type"] for stream in info["streams"]}, {"video", "audio"})
+        audio = next(stream for stream in info["streams"] if stream["codec_type"] == "audio")
+        self.assertEqual((audio["codec_name"], audio["sample_rate"]), ("aac", "48000"))
+        self.assertEqual(record["sha256"], hashlib.sha256(voice_bytes).hexdigest())
+        with zipfile.ZipFile(source_path) as archive:
+            self.assertIn("subtitles.json", archive.namelist())
+            self.assertNotIn("subtitles.ass", archive.namelist())
+            self.assertEqual(archive.read("subtitles.json"), expected_sidecar)
+            self.assertEqual(archive.read("audio/voice.wav"), voice_bytes)
+            manifest = json.loads(archive.read("manifest.json"))
+        self.assertEqual(
+            manifest["files"]["subtitles.json"]["sha256"],
+            hashlib.sha256(expected_sidecar).hexdigest(),
+        )
+        self.assertEqual(manifest["files"]["subtitles.json"]["size_bytes"], len(expected_sidecar))
+
+    def test_web_karaoke_corrupt_sidecar_fails_without_publishing_artifacts(self):
+        naskah = {"beats": [{"id": "b1", "narration": "Cakra Selaras Wahana Pagi."}]}
+        job_id, rev = _new_approved_naskah_job(self.store, naskah=naskah)
+        record, rev = _store_audio_blob(self.store, job_id, "voice", "voice", _wav_bytes())
+        composition = _voice_composition(_speech_scene(), record, mode="web")
+        created = self.store.write_composition(job_id, rev, composition)
+        run = self.store.claim(job_id, created["rev"], "preview")
+        words = [
+            {"id": "w00001", "text": "Cakra", "start_ms": 100, "end_ms": 200, "speaker_id": None, "timing_status": "aligned"},
+            {"id": "w00002", "text": "Selaras", "start_ms": 250, "end_ms": 350, "speaker_id": None, "timing_status": "aligned"},
+            {"id": "w00003", "text": "Wahana", "start_ms": 400, "end_ms": 500, "speaker_id": None, "timing_status": "aligned"},
+            {"id": "w00004", "text": "Pagi.", "start_ms": 600, "end_ms": 800, "speaker_id": None, "timing_status": "aligned"},
+        ]
+        timeline = _karaoke_timeline(record["sha256"], record["duration_ms"], words)
+
+        def corrupt_sidecar(workspace, _timeline, _voice_track):
+            path = workspace / "subtitles.json"
+            path.write_bytes(b"{broken")
+            return path, b"{broken"
+
+        with (
+            patch.object(worker, "_run_alignment", return_value=timeline),
+            patch.object(worker, "_write_custom_karaoke", side_effect=corrupt_sidecar),
+        ):
+            result = worker.execute_run(self.store, run["run_id"])
+        if result is None:
+            self.fail("worker returned no result")
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("invalid karaoke subtitle json", result.get("error", "").lower())
+        self.assertFalse(self.store.get(job_id)["artifacts"])
+        run_dir = self.root / "runs" / run["run_id"]
+        for name in ("preview.mp4", "preview.partial.mp4", "source.zip", "web-preview.html",
+                     "subtitles.json", "speech_timeline.json"):
+            self.assertFalse((run_dir / name).exists(), name)
 
     def test_timing_required_scene_without_set_timeline_fails_cleanly(self):
         job_id, rev = _new_approved_naskah_job(self.store)
