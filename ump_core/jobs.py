@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import secrets
 import shutil
 import sqlite3
+import stat
 import threading
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,39 @@ class DomainError(Exception):
     def __init__(self, code: str, message: str = ""):
         self.code = code
         super().__init__(f"{code}{': ' + message if message else ''}")
+
+
+def read_bounded_regular_file(path: str | Path, max_bytes: int, *, error_code: str = "INVALID_SNAPSHOT") -> bytes:
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise ValueError("max_bytes must be a positive integer")
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+                     | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1
+                or info.st_mode & 0o002 or info.st_size < 1 or info.st_size > max_bytes):
+            raise DomainError(error_code, "revision file is not a bounded user-owned regular file")
+        stream = os.fdopen(fd, "rb")
+        fd = None
+        with stream:
+            data = stream.read(max_bytes + 1)
+        if len(data) != info.st_size or len(data) > max_bytes:
+            raise DomainError(error_code, "revision file changed or exceeded its byte limit")
+        return data
+    except DomainError:
+        raise
+    except OSError as exc:
+        raise DomainError(error_code, "revision file is unavailable or unsafe") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _write_private_file(path: str | Path, data: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(data)
 
 
 # The style is chosen before the script is written: a script can only be
@@ -247,8 +282,8 @@ class JobStore:
         payload = {"brief": brief, "cues": {}, "mode": mode, "requirements": requirements}
         encoded = json.dumps(payload, sort_keys=True, allow_nan=False)
         rev_dir = self._job_dir(job_id) / "revisions" / "1"
-        rev_dir.mkdir(parents=True)
-        (rev_dir / "input.json").write_text(encoded, encoding="utf-8")
+        rev_dir.mkdir(parents=True, mode=0o700)
+        _write_private_file(rev_dir / "input.json", encoded.encode("utf-8"))
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("INSERT INTO jobs (job_id, brief, rev, status, error, payload, stage, origin) VALUES (?,?,?,?,?,?,?,?)",
@@ -258,10 +293,9 @@ class JobStore:
         return self.get(job_id)
 
     def write_composition(self, job_id: str, rev: int, value: dict) -> dict:
-        from .composition import validate_composition
+        from .composition import MAX_PINNED_ASSET_BYTES, MAX_PROJECT_BYTES, validate_composition
 
         composition = validate_composition(value)
-        metadata = {key: item for key, item in composition.items() if key != "html"}
         with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = self._job(db, job_id)
@@ -275,23 +309,66 @@ class JobStore:
             checkpoints = requirements.get("checkpoints", []) if isinstance(requirements, dict) else []
             if any(checkpoint != "preview" for checkpoint in checkpoints):
                 raise DomainError("UNSUPPORTED_CHECKPOINT", "M1 composition supports the preview checkpoint")
+
+            metadata = {key: item for key, item in composition.items() if key not in {"html", "assets"}}
+            asset_blobs = []
+            asset_refs = composition.get("assets", [])
+            if asset_refs:
+                from .assets import AssetStore
+
+                asset_store = AssetStore(self.root)
+                catalog = {(item["id"], item["version"]): item for item in asset_store.list()}
+                expected_bytes = 0
+                catalog_records = []
+                for reference in asset_refs:
+                    catalog_record = catalog.get((reference["id"], reference["version"]))
+                    if catalog_record is None:
+                        raise DomainError("ASSET_NOT_FOUND", f"{reference['id']} version {reference['version']}")
+                    expected_bytes += catalog_record["size_bytes"]
+                    if expected_bytes > MAX_PINNED_ASSET_BYTES:
+                        raise DomainError("ASSET_BUNDLE_TOO_LARGE", "pinned assets exceed 40 MiB")
+                    catalog_records.append(catalog_record)
+
+                asset_manifest = []
+                for reference, catalog_record in zip(asset_refs, catalog_records):
+                    record, data = asset_store.resolve(reference["id"], reference["version"])
+                    if record != catalog_record:
+                        raise DomainError("ASSET_CATALOG_CHANGED", "asset metadata changed during resolution")
+                    relative_path = f"assets/{record['id']}-v{record['version']}{Path(record['path']).suffix}"
+                    pinned = {key: item for key, item in record.items() if key != "path"}
+                    pinned["path"] = relative_path
+                    asset_manifest.append(pinned)
+                    asset_blobs.append((relative_path, data))
+                metadata["assets"] = asset_manifest
+
+            html_bytes = composition["html"].encode("utf-8")
+            project_bytes = json.dumps(metadata, sort_keys=True, allow_nan=False).encode("utf-8")
+            if len(project_bytes) > MAX_PROJECT_BYTES:
+                raise DomainError("INVALID_ASSET_MANIFEST", "project metadata exceeds its byte limit")
+
             new_rev = rev + 1
             payload["composition"] = {
                 "html_path": "composition/index.html",
                 "project_path": "project.json",
+                "html_sha256": hashlib.sha256(html_bytes).hexdigest(),
+                "project_sha256": hashlib.sha256(project_bytes).hexdigest(),
                 "metadata": metadata,
             }
             encoded = json.dumps(payload, sort_keys=True, allow_nan=False)
             rev_dir = self._job_dir(row["job_id"]) / "revisions" / str(new_rev)
-            rev_dir.mkdir(parents=True)
+            rev_dir.mkdir(parents=True, mode=0o700)
             try:
                 source_dir = rev_dir / "composition"
-                source_dir.mkdir()
-                (source_dir / "index.html").write_bytes(composition["html"].encode("utf-8"))
-                (rev_dir / "project.json").write_text(
-                    json.dumps(metadata, sort_keys=True, allow_nan=False), encoding="utf-8"
-                )
-                (rev_dir / "input.json").write_text(encoded, encoding="utf-8")
+                source_dir.mkdir(mode=0o700)
+                _write_private_file(source_dir / "index.html", html_bytes)
+                for relative_path, data in asset_blobs:
+                    destination = source_dir / relative_path
+                    destination.parent.mkdir(mode=0o700, exist_ok=True)
+                    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(data)
+                _write_private_file(rev_dir / "project.json", project_bytes)
+                _write_private_file(rev_dir / "input.json", encoded.encode("utf-8"))
                 db.execute("INSERT INTO revisions VALUES (?,?,?)", (job_id, new_rev, encoded))
                 seq = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM stage_history WHERE job_id=?",
                                  (job_id,)).fetchone()[0]
@@ -342,19 +419,56 @@ class JobStore:
                     if field in patch and payload.get(field) != original_payload.get(field):
                         rollback = target if rollback is None else min(rollback, target, key=stage_index)
             rev_dir = self._job_dir(job_id) / "revisions" / str(new_rev)
-            rev_dir.mkdir(parents=True)
+            rev_dir.mkdir(parents=True, mode=0o700)
             try:
                 if custom:
+                    from .composition import (
+                        MAX_COMPOSITION_BYTES, MAX_PROJECT_BYTES, read_pinned_asset, validate_asset_manifest,
+                    )
+
                     old_dir = self._job_dir(job_id) / "revisions" / str(rev)
-                    old_html = self._safe(old_dir / "composition" / "index.html")
-                    old_project = self._safe(old_dir / "project.json")
-                    if (old_html.is_symlink() or old_project.is_symlink()
-                            or not old_html.is_file() or not old_project.is_file()):
+                    old_source_dir = old_dir / "composition"
+                    old_html_raw = old_source_dir / "index.html"
+                    old_project_raw = old_dir / "project.json"
+                    if (old_dir.is_symlink() or old_source_dir.is_symlink()
+                            or not old_source_dir.is_dir()):
                         raise DomainError("INVALID_SNAPSHOT", "composition revision files are unavailable")
-                    (rev_dir / "composition").mkdir()
-                    shutil.copyfile(old_html, rev_dir / "composition" / "index.html")
-                    shutil.copyfile(old_project, rev_dir / "project.json")
-                (rev_dir / "input.json").write_text(encoded, encoding="utf-8")
+                    for raw_path in (old_html_raw, old_project_raw):
+                        if self._safe(raw_path) != raw_path:
+                            raise DomainError("INVALID_SNAPSHOT", "composition revision files are unavailable")
+                    html_bytes = read_bounded_regular_file(old_html_raw, MAX_COMPOSITION_BYTES)
+                    project_bytes = read_bounded_regular_file(old_project_raw, MAX_PROJECT_BYTES)
+                    original_composition = original_payload["composition"]
+                    expected_hashes = {
+                        "html_sha256": hashlib.sha256(html_bytes).hexdigest(),
+                        "project_sha256": hashlib.sha256(project_bytes).hexdigest(),
+                    }
+                    for field, digest in expected_hashes.items():
+                        if field in original_composition and original_composition[field] != digest:
+                            raise DomainError("INVALID_SNAPSHOT", f"{field} differs from its revision payload")
+                        payload["composition"][field] = digest
+                    try:
+                        project_metadata = json.loads(project_bytes)
+                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                        raise DomainError("INVALID_SNAPSHOT", "project metadata is malformed") from exc
+                    expected_metadata = original_payload.get("composition", {}).get("metadata")
+                    if not isinstance(project_metadata, dict) or project_metadata != expected_metadata:
+                        raise DomainError("INVALID_SNAPSHOT", "project metadata differs from its revision payload")
+                    asset_manifest = validate_asset_manifest(project_metadata.get("assets", []))
+                    asset_blobs = [(record["path"], read_pinned_asset(old_source_dir, record))
+                                   for record in asset_manifest]
+                    new_source_dir = rev_dir / "composition"
+                    new_source_dir.mkdir(mode=0o700)
+                    _write_private_file(new_source_dir / "index.html", html_bytes)
+                    _write_private_file(rev_dir / "project.json", project_bytes)
+                    for relative_path, data in asset_blobs:
+                        destination = new_source_dir / relative_path
+                        destination.parent.mkdir(mode=0o700, exist_ok=True)
+                        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                        with os.fdopen(fd, "wb") as stream:
+                            stream.write(data)
+                encoded = json.dumps(payload, sort_keys=True, allow_nan=False)
+                _write_private_file(rev_dir / "input.json", encoded.encode("utf-8"))
                 db.execute("INSERT INTO revisions VALUES (?,?,?)", (job_id, new_rev, encoded))
                 if rollback is None:
                     rollback = row["stage"]
@@ -607,6 +721,19 @@ class JobStore:
         if additional_rows:
             result["additional_artifacts"] = additional_rows
         return result
+
+    def get_revision_payload(self, job_id: str, rev: int) -> dict:
+        with self._db() as db:
+            row = db.execute("SELECT payload FROM revisions WHERE job_id=? AND rev=?", (job_id, rev)).fetchone()
+        if row is None:
+            raise DomainError("NOT_FOUND", "revision")
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, ValueError) as exc:
+            raise DomainError("INVALID_SNAPSHOT", "database revision payload is malformed") from exc
+        if not isinstance(payload, dict):
+            raise DomainError("INVALID_SNAPSHOT", "database revision payload is not an object")
+        return payload
 
     def get_run(self, run_id):
         with self._db() as db:

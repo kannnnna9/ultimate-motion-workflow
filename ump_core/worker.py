@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import sandbox
-from .jobs import DomainError, JobStore
+from .jobs import DomainError, JobStore, read_bounded_regular_file
 
 # Code and data live apart on purpose.
 #
@@ -515,31 +515,59 @@ def _validate_custom_video(path, metadata, deadline):
 
 
 def _render_custom(store, run, directory, deadline):
-    from .composition import validate_composition
+    from .composition import (
+        MAX_COMPOSITION_BYTES, MAX_PROJECT_BYTES, MAX_REVISION_BYTES,
+        read_pinned_asset, validate_asset_manifest, validate_composition,
+    )
 
     snapshot = owned(store.root, run['snapshot_path'])
-    payload = _read(snapshot)
+    try:
+        payload = json.loads(read_bounded_regular_file(
+            snapshot, MAX_REVISION_BYTES, error_code='INVALID_COMPOSITION',
+        ))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise DomainError('INVALID_COMPOSITION', 'revision snapshot is unreadable') from exc
+    try:
+        database_payload = store.get_revision_payload(run['job_id'], run['rev'])
+    except DomainError as exc:
+        raise DomainError('INVALID_COMPOSITION', 'database revision snapshot is unavailable') from exc
+    if payload != database_payload:
+        raise DomainError('INVALID_COMPOSITION', 'revision snapshot differs from its database record')
     composition = payload.get('composition')
     target = run['target']
     if not isinstance(composition, dict) or target not in {'preview', 'final'}:
         raise DomainError('INVALID_COMPOSITION', 'custom renderer requires a preview or final composition')
     html_name = composition.get('html_path')
     project_name = composition.get('project_path')
-    if not isinstance(html_name, str) or not isinstance(project_name, str):
-        raise DomainError('INVALID_COMPOSITION', 'missing revision-owned source paths')
+    if html_name != 'composition/index.html' or project_name != 'project.json':
+        raise DomainError('INVALID_COMPOSITION', 'composition source paths are not canonical')
     html_source = owned(snapshot.parent, html_name)
     project_source = owned(snapshot.parent, project_name)
     try:
-        html_bytes = html_source.read_bytes()
-        project_bytes = project_source.read_bytes()
+        html_bytes = read_bounded_regular_file(
+            html_source, MAX_COMPOSITION_BYTES, error_code='INVALID_COMPOSITION',
+        )
+        project_bytes = read_bounded_regular_file(
+            project_source, MAX_PROJECT_BYTES, error_code='INVALID_COMPOSITION',
+        )
+        if (composition.get('html_sha256') != hashlib.sha256(html_bytes).hexdigest()
+                or composition.get('project_sha256') != hashlib.sha256(project_bytes).hexdigest()):
+            raise DomainError('INVALID_COMPOSITION', 'revision source hashes do not match the database record')
         metadata = json.loads(project_bytes)
         html = html_bytes.decode('utf-8', 'strict')
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise DomainError('INVALID_COMPOSITION', 'revision-owned HTML or project metadata is unreadable') from exc
     if not isinstance(metadata, dict) or composition.get('metadata') != metadata:
         raise DomainError('INVALID_COMPOSITION', 'project metadata does not match the immutable revision')
-    validated = validate_composition({'html': html, **metadata})
+    asset_manifest = validate_asset_manifest(metadata.get('assets', []))
+    composition_metadata = {key: value for key, value in metadata.items() if key != 'assets'}
+    if asset_manifest:
+        composition_metadata['assets'] = [
+            {'id': record['id'], 'version': record['version']} for record in asset_manifest
+        ]
+    validated = validate_composition({'html': html, **composition_metadata})
     html_bytes = validated['html'].encode('utf-8')
+    asset_blobs = [(record, read_pinned_asset(html_source.parent, record)) for record in asset_manifest]
 
     workspace = sandbox.create_workspace('c' + uuid.uuid4().hex[:15])
     ffmpeg_process = node_process = None
@@ -554,6 +582,14 @@ def _render_custom(store, run, directory, deadline):
         staged_html.write_bytes(html_bytes)
         staged_project = workspace / 'project.json'
         staged_project.write_bytes(project_bytes)
+        for record, data in asset_blobs:
+            destination = staged_html.parent / record['path']
+            destination.parent.mkdir(mode=0o700, exist_ok=True)
+            fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(data)
+            if read_pinned_asset(staged_html.parent, record) != data:
+                raise DomainError('ASSET_INTEGRITY', 'staged asset differs from the pinned revision')
         work_video = workspace / 'preview.partial.mp4'
         ffmpeg_argv = [
             'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
@@ -621,16 +657,18 @@ def _render_custom(store, run, directory, deadline):
         _copy_regular_output(work_video, partial, workspace=workspace, max_bytes=512 * 1024 * 1024)
         _validate_custom_video(partial, validated, deadline)
         source_zip = directory / 'source.zip'
+        bundle_files = {'index.html': html_bytes, 'project.json': project_bytes}
+        bundle_files.update({record['path']: data for record, data in asset_blobs})
         manifest = {
             'schema_version': 1,
             'files': {
-                'index.html': {'sha256': hashlib.sha256(html_bytes).hexdigest(), 'size_bytes': len(html_bytes)},
-                'project.json': {'sha256': hashlib.sha256(project_bytes).hexdigest(), 'size_bytes': len(project_bytes)},
+                name: {'sha256': hashlib.sha256(data).hexdigest(), 'size_bytes': len(data)}
+                for name, data in bundle_files.items()
             },
         }
         with zipfile.ZipFile(source_zip, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-            archive.writestr('index.html', html_bytes)
-            archive.writestr('project.json', project_bytes)
+            for name, data in bundle_files.items():
+                archive.writestr(name, data)
             archive.writestr('manifest.json', json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode('utf-8'))
         player = directory / 'web-preview.html'
         player.write_text(
@@ -806,8 +844,7 @@ def execute_run(store: JobStore, run_id: str, argv=None):
                 output = _document(store, run, directory)
             else:
                 with sandbox.render_lease():
-                    snapshot = owned(store.root, run['snapshot_path'])
-                    payload = _read(snapshot)
+                    payload = store.get_revision_payload(run['job_id'], run['rev'])
                     if isinstance(payload.get('composition'), dict):
                         output, additional_artifacts = _render_custom(store, run, directory, deadline)
                     else:

@@ -1,9 +1,12 @@
 import concurrent.futures
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from ump_core.assets import AssetStore
 from ump_core.jobs import DomainError, JobStore
 
 
@@ -372,6 +375,128 @@ class JobStoreTests(unittest.TestCase):
             key: value for key, value in composition.items() if key != "html"
         })
 
+    def test_metadata_revision_rejects_tampered_composition_html(self):
+        job = self.store.create("tampered HTML revision", mode="autonomous")
+        created = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>original</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        })
+        old_dir = self.root / "jobs" / job["job_id"] / "revisions" / str(created["rev"])
+        (old_dir / "composition" / "index.html").write_text("<!doctype html><body>tampered</body>", encoding="utf-8")
+        with self.assertRaises(DomainError) as raised:
+            self.store.revise(created["job_id"], created["rev"], {"brief": "must fail closed"})
+        self.assertEqual(raised.exception.code, "INVALID_SNAPSHOT")
+        self.assertEqual(self.store.get(job["job_id"])["rev"], created["rev"])
+
+    def test_metadata_revision_rejects_project_bytes_changed_without_metadata_change(self):
+        job = self.store.create("tampered project revision", mode="autonomous")
+        created = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>original</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        })
+        project = self.root / "jobs" / job["job_id"] / "revisions" / str(created["rev"]) / "project.json"
+        project.write_bytes(project.read_bytes() + b" ")
+        with self.assertRaises(DomainError) as raised:
+            self.store.revise(created["job_id"], created["rev"], {"brief": "must fail closed"})
+        self.assertEqual(raised.exception.code, "INVALID_SNAPSHOT")
+        self.assertEqual(self.store.get(job["job_id"])["rev"], created["rev"])
+
+    def test_metadata_revision_rejects_oversized_project_json_before_read(self):
+        from ump_core.composition import MAX_PROJECT_BYTES
+
+        job = self.store.create("oversized project revision", mode="autonomous")
+        created = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>original</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        })
+        project = self.root / "jobs" / job["job_id"] / "revisions" / str(created["rev"]) / "project.json"
+        project.write_bytes(b"x" * (MAX_PROJECT_BYTES + 1))
+        with patch.object(Path, "read_bytes", side_effect=AssertionError("oversized project must not be read")):
+            with self.assertRaises(DomainError) as raised:
+                self.store.revise(created["job_id"], created["rev"], {"brief": "must fail closed"})
+        self.assertEqual(raised.exception.code, "INVALID_SNAPSHOT")
+        self.assertEqual(self.store.get(job["job_id"])["rev"], created["rev"])
+
+    def test_metadata_revision_rejects_oversized_composition_html_before_copy(self):
+        from ump_core.composition import MAX_COMPOSITION_BYTES
+
+        job = self.store.create("oversized HTML revision", mode="autonomous")
+        created = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>original</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+        })
+        old_dir = self.root / "jobs" / job["job_id"] / "revisions" / str(created["rev"])
+        (old_dir / "composition" / "index.html").write_bytes(b"x" * (MAX_COMPOSITION_BYTES + 1))
+        with self.assertRaises(DomainError) as raised:
+            self.store.revise(created["job_id"], created["rev"], {"brief": "must fail closed"})
+        self.assertEqual(raised.exception.code, "INVALID_SNAPSHOT")
+        self.assertEqual(self.store.get(job["job_id"])["rev"], created["rev"])
+
+    def test_write_composition_accepts_catalog_license_limit_in_pinned_manifest(self):
+        license_text = "L" * 129
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+        asset = AssetStore(self.root).add_svg(
+            "long-license", svg, source="test", provenance="test", license=license_text,
+        )
+        job = self.store.create("long license asset", mode="autonomous")
+        created = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>scene</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+            "assets": [{"id": "long-license", "version": asset["version"]}],
+        })
+        revision = self.root / "jobs" / job["job_id"] / "revisions" / str(created["rev"])
+        manifest = json.loads((revision / "project.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["assets"][0]["license"], license_text)
+
+    def test_metadata_revision_preserves_pinned_asset_bytes_and_manifest(self):
+        asset_store = AssetStore(self.root)
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6" viewBox="0 0 8 6"><rect width="8" height="6" fill="#345678"/></svg>'
+        record = asset_store.add_svg(
+            "leaf", svg, source="test", provenance="original", license="MIT",
+        )
+        job = self.store.create("revise pinned asset", mode="autonomous")
+        created = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": '<!doctype html><img src="assets/leaf-v1.svg">',
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+            "assets": [{"id": "leaf", "version": 1}],
+        })
+        revised = self.store.revise(created["job_id"], created["rev"], {"brief": "metadata-only change"})
+        old_dir = self.root / "jobs" / job["job_id"] / "revisions" / str(created["rev"])
+        new_dir = self.root / "jobs" / job["job_id"] / "revisions" / str(revised["rev"])
+        old_project = json.loads((old_dir / "project.json").read_text(encoding="utf-8"))
+        pinned = old_project["assets"][0]
+        self.assertEqual((new_dir / "project.json").read_bytes(), (old_dir / "project.json").read_bytes())
+        self.assertEqual((new_dir / "composition" / pinned["path"]).read_bytes(), svg.encode("utf-8"))
+        self.assertEqual(pinned["sha256"], record["sha256"])
+
+    def test_metadata_revision_rejects_symlinked_pinned_asset(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+        AssetStore(self.root).add_svg("leaf", svg, source="test", provenance="test", license="MIT")
+        job = self.store.create("tampered pinned asset", mode="autonomous")
+        created = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": "<!doctype html><body>scene</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+            "assets": [{"id": "leaf", "version": 1}],
+        })
+        revision = self.root / "jobs" / job["job_id"] / "revisions" / str(created["rev"])
+        pinned = json.loads((revision / "project.json").read_text(encoding="utf-8"))["assets"][0]
+        asset_file = revision / "composition" / pinned["path"]
+        outside = self.root / "outside.svg"
+        outside.write_bytes(svg.encode("utf-8"))
+        asset_file.unlink()
+        asset_file.symlink_to(outside)
+        with self.assertRaises(DomainError) as raised:
+            self.store.revise(created["job_id"], created["rev"], {"brief": "must fail closed"})
+        self.assertEqual(raised.exception.code, "ASSET_INTEGRITY")
+        self.assertEqual(self.store.get(job["job_id"])["rev"], created["rev"])
+
     def test_custom_route_rejects_unsupported_directed_checkpoints(self):
         job = self.store.create("unsupported checkpoint", mode="directed",
                                 requirements={"checkpoints": ["creative_direction", "preview"]})
@@ -415,6 +540,73 @@ class JobStoreTests(unittest.TestCase):
         with self.assertRaises(DomainError) as raised:
             self.store.claim(revised["job_id"], custom["rev"], "final")
         self.assertEqual(raised.exception.code, "STALE_REVISION")
+
+    def test_write_composition_pins_exact_asset_bytes_and_full_manifest(self):
+        asset_store = AssetStore(self.root)
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6" viewBox="0 0 8 6"><rect width="8" height="6" fill="#345678"/></svg>'
+        first_asset = asset_store.add_svg(
+            "leaf", svg, source="hermes-procedural", provenance="first geometry", license="MIT",
+        )
+        composition = {
+            "html": '<!doctype html><img src="assets/leaf-v1.svg">',
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": False, "subtitles_enabled": False,
+            "assets": [{"id": "leaf", "version": 1}],
+        }
+        job = self.store.create("asset-pinned composition", mode="autonomous")
+        created = self.store.write_composition(job["job_id"], job["rev"], composition)
+        revision = self.root / "jobs" / job["job_id"] / "revisions" / str(created["rev"])
+        project = json.loads((revision / "project.json").read_text(encoding="utf-8"))
+        pinned = project["assets"][0]
+        self.assertEqual(pinned["id"], "leaf")
+        self.assertEqual(pinned["version"], 1)
+        self.assertEqual(pinned["sha256"], first_asset["sha256"])
+        self.assertEqual(pinned["source"], "hermes-procedural")
+        self.assertEqual(pinned["provenance"], "first geometry")
+        pinned_file = revision / "composition" / pinned["path"]
+        self.assertEqual(pinned_file.read_bytes(), svg.encode("utf-8"))
+        self.assertEqual(hashlib.sha256(pinned_file.read_bytes()).hexdigest(), pinned["sha256"])
+        snapshot = json.loads((revision / "input.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["composition"]["metadata"], project)
+
+        changed_svg = svg.replace("#345678", "#abcdef")
+        second_asset = asset_store.add_svg(
+            "leaf", changed_svg, source="hermes-procedural", provenance="revised geometry", license="MIT",
+        )
+        self.assertEqual(second_asset["version"], 2)
+        self.assertEqual(pinned_file.read_bytes(), svg.encode("utf-8"))
+
+    def test_write_composition_rejects_unknown_asset_version(self):
+        AssetStore(self.root).add_svg(
+            "leaf", '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>',
+            source="test", provenance="test", license="MIT",
+        )
+        job = self.store.create("unknown asset version", mode="autonomous")
+        with self.assertRaises(DomainError) as raised:
+            self.store.write_composition(job["job_id"], job["rev"], {
+                "html": "<!doctype html><body>scene</body>",
+                "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+                "audio_enabled": False, "subtitles_enabled": False,
+                "assets": [{"id": "leaf", "version": 2}],
+            })
+        self.assertEqual(raised.exception.code, "ASSET_NOT_FOUND")
+        self.assertEqual(self.store.get(job["job_id"])["rev"], 1)
+
+    def test_write_composition_rejects_asset_bundle_over_limit_before_revision(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+        record = AssetStore(self.root).add_svg("leaf", svg, source="test", provenance="test", license="MIT")
+        job = self.store.create("oversized asset bundle", mode="autonomous")
+        with patch("ump_core.composition.MAX_PINNED_ASSET_BYTES", record["size_bytes"] - 1):
+            with self.assertRaises(DomainError) as raised:
+                self.store.write_composition(job["job_id"], job["rev"], {
+                    "html": "<!doctype html><body>scene</body>",
+                    "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+                    "audio_enabled": False, "subtitles_enabled": False,
+                    "assets": [{"id": "leaf", "version": 1}],
+                })
+        self.assertEqual(raised.exception.code, "ASSET_BUNDLE_TOO_LARGE")
+        self.assertEqual(self.store.get(job["job_id"])["rev"], 1)
+        self.assertFalse((self.root / "jobs" / job["job_id"] / "revisions" / "2").exists())
 
     def test_write_composition_creates_immutable_revision_snapshot(self):
         composition = {

@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ump_core import sandbox, worker
+from ump_core.assets import AssetStore
 from ump_core.jobs import JobStore
 from ump_core.tools import _artifact
 
@@ -45,6 +46,21 @@ window.UMP={{
   seek(t) {{ {bad_seek} draw(t); }}
 }};
 draw(0);
+</script>"""
+
+
+def _scene_with_asset():
+    return """<!doctype html>
+<meta charset="utf-8">
+<style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#f8f5ef}#tile{display:none}</style>
+<img id="tile" src="assets/leaf-v1.svg">
+<canvas id="scene" width="1080" height="1920"></canvas>
+<script>
+const image=document.querySelector('#tile'), canvas=document.querySelector('#scene'), ctx=canvas.getContext('2d');
+window.UMP={width:1080,height:1920,fps:30,durationFrames:30,
+ async ready(){await image.decode();},
+ seek(t){ctx.fillStyle='#f8f5ef';ctx.fillRect(0,0,1080,1920);ctx.drawImage(image,220+120*t,700,640,480);}};
+window.UMP.seek(0);
 </script>"""
 
 
@@ -235,6 +251,86 @@ class CustomRendererTests(unittest.TestCase):
         self.assertEqual(manifest["files"]["project.json"]["sha256"], hashlib.sha256(project_bytes).hexdigest())
         self.assertIn("preview.mp4", player.read_text(encoding="utf-8"))
         self._verify_player_in_chrome(player)
+
+    def test_custom_worker_rejects_tampered_revision_html_before_sandbox_start(self):
+        job_id, run = self._new_run(_scene())
+        source = self.root / "jobs" / job_id / "revisions" / str(run["rev"]) / "composition" / "index.html"
+        source.write_text(_scene(fail_after=0.5), encoding="utf-8")
+        directory = self.root / "runs" / run["run_id"]
+        with patch.object(worker.sandbox, "create_workspace", side_effect=AssertionError("sandbox must not start")):
+            with self.assertRaises(worker.DomainError) as raised:
+                worker._render_custom(self.store, run, directory, 0.0)
+        self.assertEqual(raised.exception.code, "INVALID_COMPOSITION")
+
+    def test_custom_execution_bounds_snapshot_before_json_read(self):
+        job_id, run = self._new_run(_scene())
+        with patch("ump_core.composition.MAX_REVISION_BYTES", 64):
+            with patch.object(worker, "_read", side_effect=AssertionError("unbounded snapshot read")) as read:
+                result = worker.execute_run(self.store, run["run_id"])
+        read.assert_not_called()
+        if result is None:
+            self.fail("worker did not return a run result")
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("bounded user-owned regular file", result.get("error", ""))
+        self.assertFalse(self.store.get(job_id)["artifacts"])
+
+    def test_custom_worker_rejects_tampered_snapshot_before_sandbox_start(self):
+        job_id, run = self._new_run(_scene())
+        snapshot = self.root / run["snapshot_path"]
+        payload = json.loads(snapshot.read_text(encoding="utf-8"))
+        payload["brief"] = "forged after revision approval"
+        snapshot.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        directory = self.root / "runs" / run["run_id"]
+        with patch.object(worker.sandbox, "create_workspace", side_effect=AssertionError("sandbox must not start")):
+            with self.assertRaises(worker.DomainError) as raised:
+                worker._render_custom(self.store, run, directory, 0.0)
+        self.assertEqual(raised.exception.code, "INVALID_COMPOSITION")
+
+    def test_custom_worker_rejects_tampered_pinned_asset_before_sandbox_start(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+        AssetStore(self.root).add_svg("leaf", svg, source="test", provenance="test", license="MIT")
+        job = self.store.create("tampered worker input", mode="autonomous")
+        created = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": '<!doctype html><img src="assets/leaf-v1.svg">',
+            **_project(),
+            "assets": [{"id": "leaf", "version": 1}],
+        })
+        run = self.store.claim(job["job_id"], created["rev"], "preview")
+        revision = self.root / "jobs" / job["job_id"] / "revisions" / str(created["rev"])
+        pinned = json.loads((revision / "project.json").read_text(encoding="utf-8"))["assets"][0]
+        (revision / "composition" / pinned["path"]).write_bytes(b"tampered")
+        directory = self.root / "runs" / run["run_id"]
+        with patch.object(worker.sandbox, "create_workspace", side_effect=AssertionError("sandbox must not start")):
+            with self.assertRaises(worker.DomainError) as raised:
+                worker._render_custom(self.store, run, directory, 0.0)
+        self.assertEqual(raised.exception.code, "ASSET_INTEGRITY")
+
+    def test_revision_asset_loads_in_browser_and_is_in_offline_source_bundle(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6" viewBox="0 0 8 6"><rect width="8" height="6" fill="#13579b"/></svg>'
+        asset = AssetStore(self.root).add_svg(
+            "leaf", svg, source="hermes-procedural", provenance="M2 pinned browser asset", license="MIT",
+        )
+        job = self.store.create("browser load pinned asset", mode="autonomous")
+        created = self.store.write_composition(job["job_id"], job["rev"], {
+            "html": _scene_with_asset(),
+            **_project(),
+            "assets": [{"id": "leaf", "version": asset["version"]}],
+        })
+        run = self.store.claim(job["job_id"], created["rev"], "preview")
+        result = worker.execute_run(self.store, run["run_id"])
+        self.assertEqual(result["status"], "finished", result.get("error"))
+        artifacts = self.store.get(job["job_id"])["artifacts"]
+        resolved = {item["kind"]: _artifact(self.store, job["job_id"], item["id"])["path"]
+                    for item in artifacts}
+        with zipfile.ZipFile(resolved["source"]) as archive:
+            asset_path = "assets/leaf-v1.svg"
+            self.assertEqual(archive.read(asset_path), svg.encode("utf-8"))
+            self.assertEqual(archive.namelist().count(asset_path), 1)
+            project_bytes = archive.read("project.json")
+            manifest = json.loads(archive.read("manifest.json"))
+        self.assertEqual(manifest["files"][asset_path]["sha256"], asset["sha256"])
+        self.assertEqual(manifest["files"][asset_path]["size_bytes"], len(svg.encode("utf-8")))
+        self.assertEqual(json.loads(project_bytes)["assets"][0]["sha256"], asset["sha256"])
 
     def test_partial_custom_render_publishes_no_artifacts(self):
         before = {entry.name for entry in sandbox.WORKSPACE_ROOT.iterdir() if entry.name != ".render.lock"}

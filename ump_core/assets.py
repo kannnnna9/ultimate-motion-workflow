@@ -503,7 +503,7 @@ class AssetStore:
             raise DomainError("ASSET_PATH_INVALID", "asset library cannot be inspected") from exc
         return total_bytes, file_count
 
-    def _verify_blob(self, record: dict) -> None:
+    def _read_blob(self, record: dict) -> bytes:
         path = self.root / record["path"]
         try:
             if (path.parent.is_symlink()
@@ -520,11 +520,25 @@ class AssetStore:
                     or info.st_nlink != 1 or info.st_size != record["size_bytes"]
                     or stat.S_IMODE(info.st_mode) != 0o600):
                 raise DomainError("ASSET_INTEGRITY", "asset blob type, owner, mode, or size changed")
-            digest = hashlib.sha256()
-            while chunk := stream.read(64 * 1024):
-                digest.update(chunk)
-        if digest.hexdigest() != record["sha256"]:
-            raise DomainError("ASSET_INTEGRITY", "asset blob hash changed")
+            data = stream.read(_MAX_ASSET_BYTES + 1)
+        if len(data) != record["size_bytes"] or hashlib.sha256(data).hexdigest() != record["sha256"]:
+            raise DomainError("ASSET_INTEGRITY", "asset blob size or hash changed")
+        return data
+
+    def _verify_blob(self, record: dict) -> None:
+        self._read_blob(record)
+
+    def resolve(self, asset_id: str, version: int) -> tuple[dict, bytes]:
+        if not isinstance(asset_id, str) or not _ID.fullmatch(asset_id):
+            raise DomainError("INVALID_ASSET_ID", "use a lowercase asset ID")
+        if type(version) is not int or version < 1:
+            raise DomainError("INVALID_ASSET_VERSION", "version must be a positive integer")
+        with self._catalog_lock():
+            record = next((item for item in self._records()
+                           if item["id"] == asset_id and item["version"] == version), None)
+            if record is None:
+                raise DomainError("ASSET_NOT_FOUND", f"{asset_id} version {version}")
+            return dict(record), self._read_blob(record)
 
     def _publish(self, template: dict, encoded: bytes, extension: str) -> dict:
         asset_id = template["id"]

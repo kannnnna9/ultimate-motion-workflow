@@ -444,6 +444,24 @@ class AssetStoreTests(unittest.TestCase):
             self.assertEqual(repeated, first)
             self.assertEqual(store.list(), [first])
 
+    def test_resolve_returns_verified_version_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = AssetStore(root)
+            expected = store.add_svg(
+                "leaf", SVG, source="hermes-procedural", provenance="original", license="MIT",
+            )
+            actual, data = store.resolve("leaf", 1)
+            self.assertEqual(actual, expected)
+            self.assertEqual(data, SVG.encode("utf-8"))
+            with self.assertRaises(DomainError) as raised:
+                store.resolve("leaf", 2)
+            self.assertEqual(raised.exception.code, "ASSET_NOT_FOUND")
+            (root / expected["path"]).write_bytes(b"corrupt")
+            with self.assertRaises(DomainError) as raised:
+                store.resolve("leaf", 1)
+            self.assertEqual(raised.exception.code, "ASSET_INTEGRITY")
+
     def test_interrupted_conflicting_orphan_is_preserved_and_version_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

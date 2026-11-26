@@ -1,7 +1,7 @@
 # ledger — plan: docs/ultra/plans/2026-11-26-ump-v2.0-m2-assets.md
 
 - Task 1: complete (commit `58683e0`; tests: `test_assets.py` 30/30 + `test_composition_tools.py` 9/9 + `test_storyboard.py` 8/8 → PASS; compileall and `git diff --check` → PASS).
-- Task 2: in progress — plan now includes locked `AssetStore.resolve`, optional `{id, version}` validation, immutable revision manifests/copies, sandbox staging, and asset-aware source ZIP; beginning RED tests.
+- Task 2: complete (`feat: pin verified assets into UMP compositions`; full browser/sandbox suite: 278 tests, `OK (skipped=1)`; `compileall`, `git diff --check`, and `scripts/check.py` → PASS). Independent correctness/security reviews found and verified fixes for the license-cap mismatch, database-bound HTML/project/source hashes, and bounded no-follow revision reads.
 - Task 3: pending
 - Task 4: pending
 
