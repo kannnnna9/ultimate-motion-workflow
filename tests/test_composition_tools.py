@@ -174,6 +174,17 @@ class MotionPipelineSkillContractTests(unittest.TestCase):
         self.assertIn("referensi selektif", self.lower)
         self.assertIn("references", self.lower)
 
+    def test_skill_documents_reusable_asset_contract(self):
+        for token in (
+            "ump_assets", "create_svg", "import_image", "write_composition",
+            "png", "jpeg", "source", "provenance", "license", "seed", "parameters",
+            "version", "value.assets", "sha-256", "immutable", "locked", "asset_locked",
+            "128 mib", "40 mib", "m3", "adr-010", "pending", "telegram image-cache",
+        ):
+            with self.subTest(token=token):
+                if token not in self.lower:
+                    self.fail(f"motion skill is missing asset-contract token: {token}")
+
     def test_skill_has_a_fresh_artifact_verification_gate(self):
         self.assertIn("## verification", self.lower)
         for token in ("ffprobe", "manifest.json", "normal speed", "contact sheet", "artifact ids"):

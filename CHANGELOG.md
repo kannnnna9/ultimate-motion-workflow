@@ -6,6 +6,7 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 
 ### Added
 - UMP v2.0 M1 pada branch development: komposisi HTML per revision dan renderer offline yang seekable untuk MP4 vertikal; preview MP4, bundle source ber-manifest, dan halaman player menjadi artifact yang terikat run. Jalur preset v1 tetap kompatibel.
+- UMP v2.0 M2 pada branch development: katalog aset reusable lewat `ump_assets` (SVG statis, impor attachment PNG/JPEG), metadata provenance/license/seed/parameters, SHA-256, version pinning dan creative lock; revision composition menyalin bytes terverifikasi ke source bundle. Dua komposisi orisinal 7 detik membuktikan consumer dan artikulasi internal; bukti/hashes di `docs/verification/ump-v2-progress.md`. M3 audio/ASR/subtitle dan ADR-010 tetap di luar scope.
 
 ### Security
 - Capture dijalankan tanpa akses jaringan dengan workspace sementara dan allowlist `file:` pada staged composition; akses ke file runtime di luar stage ditolak.
