@@ -185,10 +185,10 @@ python3 scripts/check.py → HASIL: SIAP
 git diff --check → PASS
 ```
 
-- M2 branch commits: T1 `58683e0`, T2 `b7f7d1a`, T3 evidence `ab84805`; M0 manual DATA_ROOT policy `a5239b7`. Current T4 documentation/regression changes are the focused commit being closed after this final gate.
+- M2 commits: T1 `58683e0`, T2 `b7f7d1a`, T3 evidence `ab84805`, T4 docs/regression `bb20955`; M0 manual DATA_ROOT policy `a5239b7`.
 - VM profile at final T3/T4 verification: Linux `6.8.0-101-generic`, 2 vCPU; RAM 7,994,241,024 B total / 5,188,329,472 B available; swap 10,674,495,488 B; root 52,721,041,408 B total / 12,365,455,360 B free (76% used); DATA_ROOT 25,891,274 B; `/dev/shm/ump-v2/1002` has only the zero-byte render lock. Python 3.11.16, Node 22.22.2/npm 10.9.7, Chrome 156.0.8078.47, FFmpeg/FFprobe 6.1.1.
 - The one expected test skip is `test_halftone_motion_pixels`: NumPy is absent. `scripts/check.py` reports ready, but Edge TTS is 7.2.7 while the changelog notes >=7.3.1; silent M2 did not exercise speech. Treat Edge TTS as an M3 preflight blocker, not as M2 validation. Other remaining limits: remote InstaBox sandbox failure and permitted local fallback above; aggregate DATA_ROOT stop gates are still manual; no external image-generation provider, M3 audio/ASR/subtitles, M4 QA/revision, M5 benchmarks, or ADR-010 continuity is claimed.
 
 ## Next
 
-M2 T1–T4 now meet the blueprint gates on `feat/ump-v2.0`; the focused T4 docs/evidence commit is being made after the final regression. M3–M5 remain pending. Keep the branch local: no merge, push, release, production plugin change, or deployment without operator approval.
+M2 T1–T4 meet the blueprint gates on `feat/ump-v2.0`; focused commits: T1 `58683e0`, T2 `b7f7d1a`, T3 `ab84805`, T4 `bb20955`. M3–M5 remain pending. Keep the branch local: no merge, push, release, production plugin change, or deployment without operator approval.

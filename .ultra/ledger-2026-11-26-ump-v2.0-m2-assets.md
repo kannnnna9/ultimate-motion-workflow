@@ -3,7 +3,7 @@
 - Task 1: complete (commit `58683e0`; tests: `test_assets.py` 30/30 + `test_composition_tools.py` 9/9 + `test_storyboard.py` 8/8 → PASS; compileall and `git diff --check` → PASS).
 - Task 2: complete (`feat: pin verified assets into UMP compositions`; full browser/sandbox suite: 278 tests, `OK (skipped=1)`; `compileall`, `git diff --check`, and `scripts/check.py` → PASS). Independent correctness/security reviews found and verified fixes for the license-cap mismatch, database-bound HTML/project/source hashes, and bounded no-follow revision reads.
 - Task 3: complete (commit `ab84805`; `verify_m2_t3.py`, `probe_m2_t3.py`, and `playback_m2_t3.py` → both outputs, hashes/source linkage, exact seek-state restoration, articulated transforms, and 1× playback PASS; full browser/sandbox suite 279 tests, 1 known NumPy-dependent skip).
-- Task 4: pending
+- Task 4: complete (commit `bb20955`; documentation contract `test_composition_tools.py` 10/10; `PYTHONPATH=. UMP_DATA_ROOT=~/.hermes/ump-v2 UMP_BROWSER=1 UMP_SANDBOX_TESTS=1 python3 -W error::ResourceWarning -m unittest discover -s tests -p 'test_*.py'` → 279 tests, `OK (skipped=1)`; `python3 scripts/check.py` → `HASIL: SIAP`; `git diff --check` → PASS). The sole skip is the known NumPy-dependent pixel test.
 
 ## Rulings
 
