@@ -7,7 +7,7 @@ Perubahan yang terlihat oleh pengguna dicatat di sini mengikuti [Keep a Changelo
 ### Added
 - UMP v2.0 M1 pada branch development: komposisi HTML per revision dan renderer offline yang seekable untuk MP4 vertikal; preview MP4, bundle source ber-manifest, dan halaman player menjadi artifact yang terikat run. Jalur preset v1 tetap kompatibel.
 - UMP v2.0 M2 pada branch development: katalog aset reusable lewat `ump_assets` (SVG statis, impor attachment PNG/JPEG), metadata provenance/license/seed/parameters, SHA-256, version pinning dan creative lock; revision composition menyalin bytes terverifikasi ke source bundle. Dua komposisi orisinal 7 detik membuktikan consumer dan artikulasi internal; bukti/hashes di `docs/verification/ump-v2-progress.md`.
-- UMP v2.0 M3 pada branch development: track audio opsional, timing kata offline yang terikat SHA audio, anchor visual-ke-ucapan, ASS editable sebagai satu pemilik subtitle, dan bypass ASR untuk jalur tanpa kebutuhan timing. Bukti real VO dan batas fallback/review dicatat di `docs/verification/ump-v2-progress.md`; belum dipasang di plugin produksi.
+- UMP v2.0 M3 pada branch development: track audio opsional, timing kata offline yang terikat SHA audio, anchor visual-ke-ucapan, subtitle ASS editable atau web-karaoke per kata dengan satu pemilik, dan bypass ASR untuk jalur tanpa kebutuhan timing. Bukti real VO/karaoke serta fallback/review gates dicatat di `docs/verification/ump-v2-progress.md`; belum dipasang di plugin produksi.
 
 ### Changed
 - ASS kini memakai smart line wrapping dalam margin mobile; review frame 360×640 menemukan dan memicu perbaikan untuk baris panjang bahasa Indonesia yang sebelumnya terpotong.
