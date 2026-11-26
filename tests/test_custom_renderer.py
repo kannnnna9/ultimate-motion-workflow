@@ -1,11 +1,15 @@
 import hashlib
+import io
 import json
+import math
 import os
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
 import uuid
+import wave
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -49,6 +53,27 @@ draw(0);
 </script>"""
 
 
+def _speech_scene(*, duration_frames=30, with_setter=True):
+    setter = """
+  setTimeline(data) {
+    if (!this.readyCalled || this.timelineCalls) throw new Error('setTimeline order/count mismatch');
+    this.timelineCalls += 1;
+    this.timeline = data;
+  },""" if with_setter else ""
+    return f"""<!doctype html><meta charset='utf-8'>
+<style>html,body{{margin:0;width:100%;height:100%;overflow:hidden;background:#f8f5ef}}</style>
+<canvas id='scene' width='1080' height='1920'></canvas><script>
+const canvas=document.querySelector('#scene'),ctx=canvas.getContext('2d');
+function draw(active){{ctx.fillStyle='#f8f5ef';ctx.fillRect(0,0,1080,1920);ctx.fillStyle=active?'#00a64f':'#092f58';ctx.fillRect(active?750:120,850,120,120);}}
+window.UMP={{
+ width:1080,height:1920,fps:30,durationFrames:{duration_frames},readyCalled:false,timelineCalls:0,timeline:null,
+ async ready(){{this.readyCalled=true;await document.fonts.ready;}},
+ {setter}
+ seek(t){{if({str(with_setter).lower()}&&!this.timelineCalls)throw new Error('timeline missing before seek');const frame=Math.round(t*30);const active=!!this.timeline?.anchors.some(a=>a.action_id==='train-arrives'&&frame>=a.frame);draw(active);}}
+}};
+</script>"""
+
+
 def _scene_with_asset():
     return """<!doctype html>
 <meta charset="utf-8">
@@ -72,7 +97,110 @@ def _project(duration_frames=30):
         "duration_frames": duration_frames,
         "audio_enabled": False,
         "subtitles_enabled": False,
+        "subtitle_mode": "none",
+        "draws_speech_text": False,
+        "speech_anchors": [],
     }
+
+
+def _wav_bytes(duration_ms=1000, sample_rate=16000):
+    frames = int(sample_rate * duration_ms / 1000)
+    raw = b"".join(
+        struct.pack("<h", int(5000 * math.sin(2 * math.pi * 440 * index / sample_rate)))
+        for index in range(frames)
+    )
+    output = io.BytesIO()
+    with wave.open(output, "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(sample_rate)
+        stream.writeframes(raw)
+    return output.getvalue()
+
+
+def _store_audio_blob(store, job_id, track_id, kind, data, duration_ms=1000, sample_rate=16000):
+    blob_ref = ("V" if kind == "voice" else "M") * 16
+    audio_dir = store._job_dir(job_id) / "audio_blobs"
+    audio_dir.mkdir(mode=0o700, exist_ok=True)
+    blob_path = audio_dir / f"{blob_ref}.wav"
+    blob_path.write_bytes(data)
+    os.chmod(blob_path, 0o600)
+    record = {
+        "track_id": track_id,
+        "blob_ref": blob_ref,
+        "kind": kind,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size_bytes": len(data),
+        "extension": ".wav",
+        "source_format": "wav",
+        "media_type": "audio/wav",
+        "codec": "pcm_s16le",
+        "duration_ms": duration_ms,
+        "sample_rate": sample_rate,
+        "channels": 1,
+        "provenance": "test-imported audio",
+        "rights_status": "unverified",
+    }
+    current = store.get_revision_payload(job_id, store.get(job_id)["rev"])
+    revised = store.revise(job_id, store.get(job_id)["rev"], {
+        "audio_library": [*current.get("audio_library", []), record],
+    })
+    return record, revised["rev"]
+
+
+def _speech_naskah():
+    return {"beats": [{"id": "b1", "narration": "Cakra Selaras Wahana."}]}
+
+
+def _new_approved_naskah_job(store, brief="speech render"):
+    job = store.create(brief, mode="autonomous")
+    revised = store.revise(job["job_id"], job["rev"], {"naskah": _speech_naskah()})
+    store.set_stage(job["job_id"], revised["rev"], "naskah_approved")
+    return job["job_id"], revised["rev"]
+
+
+def _speech_timeline(audio_sha256, duration_ms=1000):
+    words = [
+        {"id": "w00001", "text": "Cakra", "start_ms": 200, "end_ms": 300, "speaker_id": None, "timing_status": "aligned"},
+        {"id": "w00002", "text": "Selaras", "start_ms": 350, "end_ms": 450, "speaker_id": None, "timing_status": "aligned"},
+        {"id": "w00003", "text": "Wahana.", "start_ms": 500, "end_ms": 800, "speaker_id": None, "timing_status": "aligned"},
+    ]
+    return {
+        "schema_version": 1, "language": "id", "audio_sha256": audio_sha256,
+        "provider": "whisperx", "model_id": "cahya/wav2vec2-large-xlsr-indonesian",
+        "model_revision": "ce6da00000a403c7cf3857197f4132439667e8f0",
+        "status": "aligned", "duration_ms": duration_ms,
+        "words": words, "approved_transcript": "Cakra Selaras Wahana.",
+        "recognized_text": "Cakra Selaras Wahana.",
+    }
+
+
+def _voice_composition(html, record, *, mode="ass", draws_speech_text=False, anchors=None):
+    return {
+        "html": html,
+        **_project(),
+        "audio_enabled": True,
+        "audio_tracks": [{
+            "track_id": record["track_id"], "blob_ref": record["blob_ref"], "kind": record["kind"],
+            "offset_ms": 0, "trim_start_ms": 0, "trim_end_ms": record["duration_ms"],
+            "gain_db": 0.0, "fade_in_ms": 0, "fade_out_ms": 0,
+        }],
+        "subtitle_mode": mode,
+        "subtitles_enabled": mode == "ass",
+        "draws_speech_text": draws_speech_text,
+        "speech_anchors": anchors or [],
+    }
+
+
+def _frame_pixel(video, frame_index, x, y):
+    selected = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video),
+         "-vf", f"select=eq(n\\,{frame_index})", "-vsync", "0", "-frames:v", "1",
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        check=True, capture_output=True, timeout=30,
+    ).stdout
+    offset = (y * 1080 + x) * 3
+    return tuple(selected[offset:offset + 3])
 
 
 @unittest.skipUnless(ENABLED, "set UMP_BROWSER=1 UMP_SANDBOX_TESTS=1 for browser renderer integration tests")
@@ -216,12 +344,16 @@ class CustomRendererTests(unittest.TestCase):
         html = _scene()
         job_id, run = self._new_run(html)
         with patch.object(worker, "_stage", side_effect=AssertionError("custom path entered legacy stage")) as legacy_stage, \
-             patch.object(worker, "prepare_audio", side_effect=AssertionError("custom path invoked ASR/captions")) as captions, \
+             patch.object(worker, "prepare_audio", side_effect=AssertionError("custom path invoked legacy ASR/captions")) as captions, \
+             patch.object(worker, "_run_alignment", side_effect=AssertionError("silent path invoked ASR")) as alignment, \
+             patch.object(worker, "_write_custom_subtitle", side_effect=AssertionError("silent path created subtitles")) as subtitle, \
              patch.object(worker, "_mux", side_effect=AssertionError("custom path invoked legacy mux")) as legacy_mux:
             result = worker.execute_run(self.store, run["run_id"])
         self.assertEqual(result["status"], "finished", result.get("error"))
         legacy_stage.assert_not_called()
         captions.assert_not_called()
+        alignment.assert_not_called()
+        subtitle.assert_not_called()
         legacy_mux.assert_not_called()
 
         artifacts = self.store.get(job_id)["artifacts"]
@@ -251,6 +383,130 @@ class CustomRendererTests(unittest.TestCase):
         self.assertEqual(manifest["files"]["project.json"]["sha256"], hashlib.sha256(project_bytes).hexdigest())
         self.assertIn("preview.mp4", player.read_text(encoding="utf-8"))
         self._verify_player_in_chrome(player)
+
+    def test_music_only_custom_render_skips_asr_and_subtitles(self):
+        job = self.store.create("music-only custom scene", mode="autonomous")
+        record, rev = _store_audio_blob(self.store, job["job_id"], "bed", "music", _wav_bytes())
+        composition = _voice_composition(_speech_scene(with_setter=False), record, mode="none")
+        composition["speech_anchors"] = []
+        created = self.store.write_composition(job["job_id"], rev, composition)
+        run = self.store.claim(job["job_id"], created["rev"], "preview")
+        with patch.object(worker, "_run_alignment", side_effect=AssertionError("music-only path invoked ASR")) as alignment, \
+             patch.object(worker, "_write_custom_subtitle", side_effect=AssertionError("music-only path wrote subtitles")) as subtitle:
+            result = worker.execute_run(self.store, run["run_id"])
+        self.assertEqual(result["status"], "finished", result.get("error"))
+        alignment.assert_not_called()
+        subtitle.assert_not_called()
+        kinds = {item["kind"] for item in self.store.get(job["job_id"])["artifacts"]}
+        self.assertEqual(kinds, {"preview", "source", "web_preview"})
+        preview = Path(_artifact(self.store, job["job_id"], result["artifact"]["id"])["path"])
+        info = json.loads(subprocess.check_output([
+            "ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(preview)
+        ]))
+        self.assertEqual({stream["codec_type"] for stream in info["streams"]}, {"video", "audio"})
+        audio = next(stream for stream in info["streams"] if stream["codec_type"] == "audio")
+        self.assertEqual((audio["codec_name"], audio["sample_rate"]), ("aac", "48000"))
+
+    def test_voice_ass_alignment_sets_one_visible_action_and_publishes_one_sidecar(self):
+        job_id, rev = _new_approved_naskah_job(self.store)
+        record, rev = _store_audio_blob(self.store, job_id, "voice", "voice", _wav_bytes())
+        bed_record, rev = _store_audio_blob(self.store, job_id, "bed", "music", _wav_bytes())
+        anchor = {"id": "arrival", "word_id": "w00002", "action_id": "train-arrives", "offset_ms": 0}
+        composition = _voice_composition(_speech_scene(), record, anchors=[anchor])
+        composition["audio_tracks"].append({
+            "track_id": bed_record["track_id"], "blob_ref": bed_record["blob_ref"], "kind": bed_record["kind"],
+            "offset_ms": 0, "trim_start_ms": 0, "trim_end_ms": bed_record["duration_ms"],
+            "gain_db": -20.0, "fade_in_ms": 0, "fade_out_ms": 0,
+        })
+        created = self.store.write_composition(job_id, rev, composition)
+        run = self.store.claim(job_id, created["rev"], "preview")
+        timeline = _speech_timeline(record["sha256"], record["duration_ms"])
+        with patch.object(worker, "_run_alignment", return_value=timeline) as alignment:
+            result = worker.execute_run(self.store, run["run_id"])
+        self.assertEqual(result["status"], "finished", result.get("error"))
+        alignment.assert_called_once()
+        kinds = [item["kind"] for item in result["additional_artifacts"]]
+        self.assertEqual(kinds.count("subtitles"), 1)
+        self.assertEqual(kinds.count("speech_timeline"), 1)
+        preview = Path(_artifact(self.store, job_id, result["artifact"]["id"])["path"])
+        info = json.loads(subprocess.check_output([
+            "ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(preview)
+        ]))
+        self.assertEqual({stream["codec_type"] for stream in info["streams"]}, {"video", "audio"})
+        audio = next(stream for stream in info["streams"] if stream["codec_type"] == "audio")
+        self.assertEqual((audio["codec_name"], audio["sample_rate"]), ("aac", "48000"))
+        before = _frame_pixel(preview, 5, 180, 910)
+        before_anchor = _frame_pixel(preview, 10, 180, 910)
+        background = _frame_pixel(preview, 10, 810, 910)
+        after = _frame_pixel(preview, 11, 810, 910)
+        self.assertLess(max(abs(left - right) for left, right in zip(before, before_anchor)), 12)
+        self.assertGreater(before[2], before[0] + 30)
+        self.assertGreater(background[0], 200)
+        self.assertGreater(after[1], after[0] + 80)
+        self.assertGreater(after[1], after[2] + 40)
+        source_id = next(item["id"] for item in result["additional_artifacts"] if item["kind"] == "source")
+        source = Path(_artifact(self.store, job_id, source_id)["path"])
+        subtitle_id = next(item["id"] for item in result["additional_artifacts"] if item["kind"] == "subtitles")
+        subtitle = Path(_artifact(self.store, job_id, subtitle_id)["path"])
+        timeline_id = next(item["id"] for item in result["additional_artifacts"] if item["kind"] == "speech_timeline")
+        speech_timeline = Path(_artifact(self.store, job_id, timeline_id)["path"])
+        self.assertTrue(subtitle.is_file())
+        self.assertEqual(json.loads(speech_timeline.read_text(encoding="utf-8"))["audio_sha256"], record["sha256"])
+        with zipfile.ZipFile(source) as archive:
+            self.assertIn("audio/voice.wav", archive.namelist())
+            self.assertIn("audio/bed.wav", archive.namelist())
+            self.assertIn("speech_timeline.json", archive.namelist())
+            self.assertIn("subtitles.ass", archive.namelist())
+
+    def test_timing_required_scene_without_set_timeline_fails_cleanly(self):
+        job_id, rev = _new_approved_naskah_job(self.store)
+        record, rev = _store_audio_blob(self.store, job_id, "voice", "voice", _wav_bytes())
+        anchor = {"id": "arrival", "word_id": "w00002", "action_id": "train-arrives", "offset_ms": 0}
+        created = self.store.write_composition(
+            job_id, rev, _voice_composition(_speech_scene(with_setter=False), record, anchors=[anchor]),
+        )
+        run = self.store.claim(job_id, created["rev"], "preview")
+        timeline = _speech_timeline(record["sha256"], record["duration_ms"])
+        with patch.object(worker, "_run_alignment", return_value=timeline):
+            result = worker.execute_run(self.store, run["run_id"])
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("setTimeline", result.get("error", ""))
+        self.assertFalse(self.store.get(job_id)["artifacts"])
+        run_dir = self.root / "runs" / run["run_id"]
+        for name in ("preview.mp4", "preview.partial.mp4", "source.zip", "subtitles.ass", "speech_timeline.json"):
+            self.assertFalse((run_dir / name).exists(), name)
+
+    def test_asr_failure_publishes_no_partial_audio_or_subtitle_artifacts(self):
+        job_id, rev = _new_approved_naskah_job(self.store)
+        record, rev = _store_audio_blob(self.store, job_id, "voice", "voice", _wav_bytes())
+        anchor = {"id": "arrival", "word_id": "w00002", "action_id": "train-arrives", "offset_ms": 0}
+        created = self.store.write_composition(job_id, rev, _voice_composition(_speech_scene(), record, anchors=[anchor]))
+        run = self.store.claim(job_id, created["rev"], "preview")
+        with patch.object(worker, "_run_alignment", side_effect=worker.DomainError("ASR_FAILED", "forced failure")):
+            result = worker.execute_run(self.store, run["run_id"])
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(self.store.get(job_id)["artifacts"])
+        run_dir = self.root / "runs" / run["run_id"]
+        for name in ("preview.mp4", "preview.partial.mp4", "source.zip", "web-preview.html", "subtitles.ass", "speech_timeline.json"):
+            self.assertFalse((run_dir / name).exists(), name)
+
+    def test_mux_failure_publishes_no_partial_audio_or_subtitle_artifacts(self):
+        job_id, rev = _new_approved_naskah_job(self.store)
+        record, rev = _store_audio_blob(self.store, job_id, "voice", "voice", _wav_bytes())
+        anchor = {"id": "arrival", "word_id": "w00002", "action_id": "train-arrives", "offset_ms": 0}
+        created = self.store.write_composition(job_id, rev, _voice_composition(_speech_scene(), record, anchors=[anchor]))
+        run = self.store.claim(job_id, created["rev"], "preview")
+        timeline = _speech_timeline(record["sha256"], record["duration_ms"])
+        with (
+            patch.object(worker, "_run_alignment", return_value=timeline),
+            patch.object(worker, "_build_custom_mux_argv", return_value=[sys.executable, "-c", "raise SystemExit(7)"]),
+        ):
+            result = worker.execute_run(self.store, run["run_id"])
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(self.store.get(job_id)["artifacts"])
+        run_dir = self.root / "runs" / run["run_id"]
+        for name in ("preview.mp4", "preview.partial.mp4", "source.zip", "web-preview.html", "subtitles.ass", "speech_timeline.json"):
+            self.assertFalse((run_dir / name).exists(), name)
 
     def test_custom_worker_rejects_tampered_revision_html_before_sandbox_start(self):
         job_id, run = self._new_run(_scene())

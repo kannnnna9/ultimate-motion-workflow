@@ -5,6 +5,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -203,6 +204,13 @@ def _read(path):
 
 def _write(path, doc):
     path.write_text(json.dumps(doc, ensure_ascii=False, allow_nan=False), encoding='utf-8')
+
+
+def _write_private_bytes(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(data)
+    return path
 
 
 def _copy_regular_output(source, destination, *, workspace, max_bytes):
@@ -488,7 +496,163 @@ def _tail_text(buffer, workspace):
     return bytes(buffer).decode('utf-8', 'replace').strip().replace(str(workspace), '<workspace>')[-1200:]
 
 
-def _validate_custom_video(path, metadata, deadline):
+def _needs_speech_timing(project):
+    return project.get('subtitle_mode', 'none') == 'ass' or bool(project.get('speech_anchors', []))
+
+
+def _quantize_speech_anchors(anchors, *, duration_frames, fps=30):
+    if type(duration_frames) is not int or duration_frames < 1 or type(fps) is not int or fps < 1:
+        raise DomainError('INVALID_SPEECH_ANCHOR', 'visual frame clock is invalid')
+    if not isinstance(anchors, list):
+        raise DomainError('INVALID_SPEECH_ANCHOR', 'resolved anchors must be a list')
+    result = []
+    for anchor in anchors:
+        if not isinstance(anchor, dict) or type(anchor.get('at_ms')) is not int:
+            raise DomainError('INVALID_SPEECH_ANCHOR', 'resolved anchor timing is invalid')
+        frame = math.floor(anchor['at_ms'] * fps / 1000 + 0.5)
+        frame = min(max(frame, 0), duration_frames - 1)
+        result.append({**anchor, 'frame': frame, 'frame_time_ms': math.floor(frame * 1000 / fps + 0.5)})
+    return result
+
+
+def _seconds(milliseconds):
+    return f'{milliseconds / 1000:.6f}'
+
+
+def _build_custom_mux_argv(video_path, audio_paths, audio_tracks, output_path, project, *, subtitle_filename=None):
+    if len(audio_paths) != len(audio_tracks) or not audio_tracks:
+        raise DomainError('INVALID_AUDIO_TRACK', 'mux requires matching audio inputs and track metadata')
+    if subtitle_filename is not None and (
+        Path(subtitle_filename).name != subtitle_filename or not re.fullmatch(r'[A-Za-z0-9_.-]+', subtitle_filename)
+    ):
+        raise DomainError('INVALID_ARTIFACT', 'subtitle path must be a workspace-local basename')
+    frames, fps = project['duration_frames'], project['fps']
+    if type(frames) is not int or type(fps) is not int or frames < 1 or fps != 30:
+        raise DomainError('INVALID_COMPOSITION', 'mux duration or rate is invalid')
+    duration = f'{frames / fps:.9f}'
+    argv = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-protocol_whitelist', 'file', '-i', str(video_path)]
+    for audio_path in audio_paths:
+        argv.extend(['-protocol_whitelist', 'file', '-i', str(audio_path)])
+    filters = []
+    if subtitle_filename is not None:
+        filters.append(f'[0:v:0]subtitles=filename={subtitle_filename}[vout]')
+    audio_labels = []
+    audio_filter_parts = []
+    for index, track in enumerate(audio_tracks, start=1):
+        sample_rate = track['sample_rate']
+        if type(sample_rate) is not int or sample_rate < 1:
+            raise DomainError('INVALID_AUDIO_TRACK', 'audio sample rate is invalid')
+        start_sample = round(track['trim_start_ms'] * sample_rate / 1000)
+        end_sample = round(track['trim_end_ms'] * sample_rate / 1000)
+        if start_sample >= end_sample:
+            raise DomainError('INVALID_AUDIO_TRACK', 'trim collapses at the source sample rate')
+        chain = [
+            f'atrim=start_sample={start_sample}:end_sample={end_sample}',
+            'asetpts=PTS-STARTPTS',
+            f'volume={track["gain_db"]:.3f}dB',
+        ]
+        if track['fade_in_ms']:
+            chain.append(f'afade=t=in:st=0:d={_seconds(track["fade_in_ms"])}')
+        if track['fade_out_ms']:
+            fade_start_ms = track['trim_end_ms'] - track['trim_start_ms'] - track['fade_out_ms']
+            chain.append(f'afade=t=out:st={_seconds(fade_start_ms)}:d={_seconds(track["fade_out_ms"])}')
+        chain.extend([
+            f'adelay={track["offset_ms"]}:all=1',
+            'aresample=48000',
+            'aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo',
+        ])
+        audio_filter_parts.append(f'[{index}:a:0]'+','.join(chain)+f'[a{index}]')
+        audio_labels.append(f'[a{index}]')
+
+    if len(audio_tracks) == 1:
+        mix = f'{audio_labels[0]}apad=whole_dur={duration},atrim=duration={duration},asetpts=PTS-STARTPTS[aout]'
+    else:
+        inputs = ''.join(audio_labels)
+        mix = f'{inputs}amix=inputs={len(audio_tracks)}:duration=longest:normalize=0,apad=whole_dur={duration},atrim=duration={duration},asetpts=PTS-STARTPTS[aout]'
+    graph_parts = filters + audio_filter_parts + [mix]
+    argv.extend(['-filter_complex', ';'.join(graph_parts)])
+    if subtitle_filename is not None:
+        argv.extend(['-map', '[vout]', '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', str(fps), '-threads', '2'])
+    else:
+        argv.extend(['-map', '0:v:0', '-c:v', 'copy'])
+    argv.extend([
+        '-map', '[aout]', '-frames:v', str(frames), '-c:a', 'aac', '-b:a', '192k',
+        '-ar', '48000', '-ac', '2', '-t', duration, '-movflags', '+faststart',
+        '-fs', str(512 * 1024 * 1024), str(output_path),
+    ])
+    return argv
+
+
+def _run_alignment(workspace, audio_path, transcript_path, *, audio_sha256, duration_ms, provider, deadline):
+    from .audio import validate_speech_timeline
+
+    runtime_root = sandbox.ASR_RUNTIME_ROOT
+    model_root = sandbox.ASR_MODEL_ROOT
+    python = runtime_root / 'bin' / 'python'
+    runner = CODE_ROOT / 'scripts' / 'asr' / 'align.py'
+    command = [
+        str(python), str(runner), '--audio', str(audio_path), '--transcript-json', str(transcript_path),
+        '--language', 'id', '--provider', provider,
+    ]
+    process, unit = sandbox.start_asr_isolated(
+        command, workspace=workspace, runtime_root=runtime_root, model_root=model_root,
+        timeout_s=_remaining_seconds(deadline),
+    )
+    try:
+        status = sandbox.wait_isolated(process, unit, timeout_s=_remaining_seconds(deadline))
+        stdout, stderr = process.communicate(timeout=10)
+    except subprocess.TimeoutExpired as exc:
+        raise DomainError('RENDER_TIMEOUT', 'ASR process did not close after its sandbox exited') from exc
+    if status == 124:
+        raise DomainError('RENDER_TIMEOUT', 'ASR inference exceeded the remaining render deadline')
+    if status:
+        detail = stderr.decode('utf-8', 'replace').strip().replace(str(workspace), '<workspace>')[-1200:]
+        raise DomainError('ASR_FAILED', f'{provider} runner exit {status}: {detail}')
+    if len(stdout) > 4 * 1024 * 1024:
+        raise DomainError('ASR_FAILED', 'ASR runner output exceeds 4 MiB')
+    try:
+        lines = stdout.decode('utf-8', 'strict').splitlines()
+        if len(lines) != 1:
+            raise ValueError('runner must emit exactly one JSON line')
+        document = json.loads(lines[0])
+        return validate_speech_timeline(document, audio_sha256=audio_sha256, duration_ms=duration_ms)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise DomainError('INVALID_SPEECH_TIMELINE', str(exc)) from exc
+
+
+def _align_voice_timeline(workspace, audio_path, transcript_path, *, audio_sha256, duration_ms, approved_text, deadline):
+    failures = []
+    for provider in ('whisperx', 'faster-whisper'):
+        timeline = _run_alignment(
+            workspace, audio_path, transcript_path, audio_sha256=audio_sha256,
+            duration_ms=duration_ms, provider=provider, deadline=deadline,
+        )
+        if timeline.get('approved_transcript') != approved_text:
+            raise DomainError('APPROVED_TRANSCRIPT_MISMATCH', 'ASR runner used different approved text')
+        if timeline['status'] != 'unresolved':
+            return timeline
+        failures.append(f'{provider}:{timeline.get("reason", "unresolved")}')
+    raise DomainError('SPEECH_ALIGNMENT_FAILED', ';'.join(failures))
+
+
+def _write_custom_subtitle(workspace, timeline, voice_track):
+    from .subtitles import MOBILE_ASS_STYLE, render_subtitles
+
+    subtitle_bytes = render_subtitles(
+        'ass', timeline, MOBILE_ASS_STYLE,
+        audio_sha256=voice_track['sha256'], track_duration_ms=voice_track['duration_ms'],
+        width=1080, height=1920,
+    )
+    if subtitle_bytes is None:
+        raise DomainError('INVALID_SUBTITLE', 'ASS mode produced no sidecar')
+    path = workspace / 'subtitles.ass'
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(subtitle_bytes)
+    return path, subtitle_bytes
+
+
+def _validate_custom_video(path, metadata, deadline, *, audio_enabled=False):
     try:
         result = subprocess.run(
             ['ffprobe', '-v', 'error', '-count_frames', '-show_streams', '-show_format', '-of', 'json', str(path)],
@@ -501,23 +665,42 @@ def _validate_custom_video(path, metadata, deadline):
     try:
         info = json.loads(result.stdout)
         streams = info['streams']
-        video = streams[0]
+        video_streams = [stream for stream in streams if stream.get('codec_type') == 'video']
+        audio_streams = [stream for stream in streams if stream.get('codec_type') == 'audio']
+        video = video_streams[0]
         duration = float(info['format']['duration'])
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise DomainError('INVALID_ARTIFACT', 'ffprobe returned incomplete custom video metadata') from exc
     expected_duration = metadata['duration_frames'] / metadata['fps']
-    if (len(streams) != 1 or video.get('codec_type') != 'video' or video.get('codec_name') != 'h264'
+    streams_valid = (
+        len(streams) == 2 and len(video_streams) == 1 and len(audio_streams) == 1
+        and audio_streams[0].get('codec_name') == 'aac'
+        and audio_streams[0].get('sample_rate') == '48000'
+        and audio_streams[0].get('channels') == 2
+    ) if audio_enabled else (len(streams) == 1 and len(video_streams) == 1 and not audio_streams)
+    if (not streams_valid or video.get('codec_name') != 'h264'
             or video.get('width') != metadata['width'] or video.get('height') != metadata['height']
             or video.get('avg_frame_rate') != f"{metadata['fps']}/1"
             or video.get('nb_read_frames') != str(metadata['duration_frames'])
             or abs(duration - expected_duration) > 0.01):
-        raise DomainError('INVALID_ARTIFACT', 'custom video codec, dimensions, rate, frames, or duration mismatch')
+        raise DomainError('INVALID_ARTIFACT', 'custom video streams, codec, dimensions, rate, frames, or duration mismatch')
+    try:
+        decoded = subprocess.run(
+            ['ffmpeg', '-nostdin', '-v', 'error', '-xerror', '-i', str(path), '-f', 'null', '-'],
+            capture_output=True, text=True, timeout=_remaining_seconds(deadline),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise DomainError('RENDER_TIMEOUT', 'custom MP4 decode validation timed out') from exc
+    if decoded.returncode:
+        raise DomainError('INVALID_ARTIFACT', decoded.stderr.strip()[-800:] or 'custom MP4 did not fully decode')
 
 
 def _render_custom(store, run, directory, deadline):
+    from .audio import resolve_speech_anchors
     from .composition import (
         MAX_COMPOSITION_BYTES, MAX_PROJECT_BYTES, MAX_REVISION_BYTES,
-        read_pinned_asset, validate_asset_manifest, validate_composition,
+        read_pinned_asset, read_pinned_audio, validate_asset_manifest, validate_audio_manifest,
+        validate_composition,
     )
 
     snapshot = owned(store.root, run['snapshot_path'])
@@ -559,23 +742,67 @@ def _render_custom(store, run, directory, deadline):
         raise DomainError('INVALID_COMPOSITION', 'revision-owned HTML or project metadata is unreadable') from exc
     if not isinstance(metadata, dict) or composition.get('metadata') != metadata:
         raise DomainError('INVALID_COMPOSITION', 'project metadata does not match the immutable revision')
+    video_duration_ms = metadata.get('duration_frames', 0) * 1000 // metadata.get('fps', 30)
     asset_manifest = validate_asset_manifest(metadata.get('assets', []))
-    composition_metadata = {key: value for key, value in metadata.items() if key != 'assets'}
+    raw_audio_manifest = metadata.get('audio_tracks', [])
+    if raw_audio_manifest:
+        if metadata.get('audio_enabled') is not True:
+            raise DomainError('INVALID_COMPOSITION', 'audio manifest is disabled in project metadata')
+        audio_manifest = validate_audio_manifest(raw_audio_manifest, video_duration_ms=video_duration_ms)
+    else:
+        audio_manifest = []
+        if metadata.get('audio_enabled') is not False:
+            raise DomainError('INVALID_COMPOSITION', 'audio-enabled project has no pinned tracks')
+    audio_refs = [{key: record[key] for key in (
+        'track_id', 'blob_ref', 'kind', 'offset_ms', 'trim_start_ms', 'trim_end_ms',
+        'gain_db', 'fade_in_ms', 'fade_out_ms',
+    )} for record in audio_manifest]
+    composition_metadata = {
+        key: value for key, value in metadata.items()
+        if key not in {'assets', 'audio_tracks', 'approved_naskah_sha256'}
+    }
     if asset_manifest:
         composition_metadata['assets'] = [
             {'id': record['id'], 'version': record['version']} for record in asset_manifest
         ]
+    if audio_refs:
+        composition_metadata['audio_tracks'] = audio_refs
     validated = validate_composition({'html': html, **composition_metadata})
     html_bytes = validated['html'].encode('utf-8')
     asset_blobs = [(record, read_pinned_asset(html_source.parent, record)) for record in asset_manifest]
+    audio_blobs = [(record, read_pinned_audio(html_source.parent, record)) for record in audio_manifest]
+    needs_timing = _needs_speech_timing(validated)
+    voice_tracks = [record for record in audio_manifest if record['kind'] == 'voice']
+    approved_text = None
+    if needs_timing:
+        if len(voice_tracks) != 1:
+            raise DomainError('INVALID_COMPOSITION', 'speech timing requires exactly one pinned voice track')
+        naskah = payload.get('naskah')
+        approved_hash = metadata.get('approved_naskah_sha256')
+        if not isinstance(naskah, dict) or not isinstance(approved_hash, str):
+            raise DomainError('TRANSCRIPT_REQUIRED', 'speech timing requires a pinned approved naskah')
+        try:
+            encoded_naskah = json.dumps(naskah, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')
+        except (TypeError, ValueError, UnicodeEncodeError) as exc:
+            raise DomainError('INVALID_NASKAH', 'approved naskah is not canonical JSON') from exc
+        if hashlib.sha256(encoded_naskah).hexdigest() != approved_hash:
+            raise DomainError('APPROVED_SCRIPT_CHANGED', 'naskah differs from its composition-pinned hash')
+        try:
+            from scripts.asr.align import flatten_transcript
+            approved_text = flatten_transcript(naskah)
+        except (ImportError, ValueError) as exc:
+            raise DomainError('TRANSCRIPT_REQUIRED', 'approved naskah has no usable narration') from exc
+
 
     workspace = sandbox.create_workspace('c' + uuid.uuid4().hex[:15])
-    ffmpeg_process = node_process = None
-    ffmpeg_unit = node_unit = None
+    ffmpeg_process = node_process = mux_process = None
+    ffmpeg_unit = node_unit = mux_unit = None
     drainers = []
     node_tail = bytearray()
     ffmpeg_tail = bytearray()
     ffmpeg_stdout_tail = bytearray()
+    mux_tail = bytearray()
+    mux_stdout_tail = bytearray()
     try:
         staged_html = workspace / 'composition' / 'index.html'
         staged_html.parent.mkdir(mode=0o700)
@@ -585,11 +812,59 @@ def _render_custom(store, run, directory, deadline):
         for record, data in asset_blobs:
             destination = staged_html.parent / record['path']
             destination.parent.mkdir(mode=0o700, exist_ok=True)
-            fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, 'wb') as stream:
-                stream.write(data)
+            _write_private_bytes(destination, data)
             if read_pinned_asset(staged_html.parent, record) != data:
                 raise DomainError('ASSET_INTEGRITY', 'staged asset differs from the pinned revision')
+        audio_path_by_track = {}
+        for record, data in audio_blobs:
+            destination = staged_html.parent / record['path']
+            destination.parent.mkdir(mode=0o700, exist_ok=True)
+            _write_private_bytes(destination, data)
+            if read_pinned_audio(staged_html.parent, record) != data:
+                raise DomainError('AUDIO_INTEGRITY', 'staged audio differs from the pinned revision')
+            audio_path_by_track[record['track_id']] = destination
+
+        timeline = None
+        speech_timeline_bytes = None
+        speech_timeline_path = None
+        timing_path = None
+        naskah_bytes = None
+        subtitle_bytes = None
+        subtitle_path = None
+        voice_record = voice_tracks[0] if needs_timing else None
+        if needs_timing:
+            if voice_record is None:
+                raise DomainError('INVALID_COMPOSITION', 'speech timing has no voice track')
+            naskah_bytes = json.dumps(payload['naskah'], ensure_ascii=False, sort_keys=True,
+                                      separators=(',', ':'), allow_nan=False).encode('utf-8')
+            naskah_path = _write_private_bytes(workspace / 'naskah.json', naskah_bytes)
+            timeline = _align_voice_timeline(
+                workspace, audio_path_by_track[voice_record['track_id']], naskah_path,
+                audio_sha256=voice_record['sha256'], duration_ms=voice_record['duration_ms'],
+                approved_text=approved_text, deadline=deadline,
+            )
+            resolved_anchors = resolve_speech_anchors(
+                timeline, validated['speech_anchors'], video_duration_ms=video_duration_ms,
+            )
+            quantized_anchors = _quantize_speech_anchors(
+                resolved_anchors, duration_frames=metadata['duration_frames'], fps=metadata['fps'],
+            )
+            timing_data = {
+                'audio_sha256': voice_record['sha256'],
+                'words': timeline['words'],
+                'anchors': quantized_anchors,
+            }
+            timing_path = _write_private_bytes(
+                workspace / 'timing.json',
+                json.dumps(timing_data, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8'),
+            )
+            speech_timeline_bytes = json.dumps(
+                timeline, ensure_ascii=False, sort_keys=True, indent=2,
+            ).encode('utf-8') + bytes([10])
+            speech_timeline_path = _write_private_bytes(workspace / 'speech_timeline.json', speech_timeline_bytes)
+            if validated['subtitle_mode'] == 'ass':
+                subtitle_path, subtitle_bytes = _write_custom_subtitle(workspace, timeline, voice_record)
+
         work_video = workspace / 'preview.partial.mp4'
         ffmpeg_argv = [
             'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
@@ -611,6 +886,8 @@ def _render_custom(store, run, directory, deadline):
             drainers.append(thread)
 
         recorder = ['node', str(CODE_ROOT / 'scripts' / 'record_custom.mjs'), str(staged_html), str(staged_project)]
+        if timing_path is not None:
+            recorder.append(str(timing_path))
         node_process, node_unit = sandbox.start_isolated(
             recorder, workspace=workspace, timeout_s=_remaining_seconds(deadline),
             private_pid_namespace=True,
@@ -653,12 +930,54 @@ def _render_custom(store, run, directory, deadline):
             detail = _tail_text(ffmpeg_tail, workspace)
             raise DomainError('RENDER_FAILED', f'FFmpeg exit {ffmpeg_status}: {detail}')
 
+        final_workspace_video = work_video
+        if metadata['audio_enabled']:
+            muxed_video = workspace / 'muxed.partial.mp4'
+            mux_argv = _build_custom_mux_argv(
+                work_video,
+                [audio_path_by_track[record['track_id']] for record in audio_manifest],
+                audio_manifest,
+                muxed_video,
+                metadata,
+                subtitle_filename='subtitles.ass' if subtitle_path is not None else None,
+            )
+            mux_process, mux_unit = sandbox.start_isolated(
+                mux_argv, workspace=workspace, timeout_s=_remaining_seconds(deadline),
+                private_pid_namespace=True,
+            )
+            if mux_process.stdout is None or mux_process.stderr is None:
+                raise DomainError('ISOLATION_UNAVAILABLE', 'FFmpeg mux pipes were not created')
+            for stream, buffer in ((mux_process.stderr, mux_tail), (mux_process.stdout, mux_stdout_tail)):
+                thread = threading.Thread(target=_drain_bounded, args=(stream, buffer), daemon=True)
+                thread.start()
+                drainers.append(thread)
+            mux_status = sandbox.wait_isolated(mux_process, mux_unit, timeout_s=_remaining_seconds(deadline))
+            for thread in drainers:
+                thread.join(timeout=5)
+            if any(thread.is_alive() for thread in drainers):
+                raise DomainError('RENDER_FAILED', 'FFmpeg mux output pipe did not close')
+            mux_process.stdout.close()
+            mux_process.stderr.close()
+            if mux_status == 124:
+                raise DomainError('RENDER_TIMEOUT', 'custom audio mux timed out')
+            if mux_status:
+                detail = _tail_text(mux_tail, workspace)
+                raise DomainError('RENDER_FAILED', f'FFmpeg mux exit {mux_status}: {detail}')
+            final_workspace_video = muxed_video
+
         partial = directory / f'{target}.partial.mp4'
-        _copy_regular_output(work_video, partial, workspace=workspace, max_bytes=512 * 1024 * 1024)
-        _validate_custom_video(partial, validated, deadline)
+        _copy_regular_output(final_workspace_video, partial, workspace=workspace, max_bytes=512 * 1024 * 1024)
+        _validate_custom_video(partial, validated, deadline, audio_enabled=metadata['audio_enabled'])
         source_zip = directory / 'source.zip'
         bundle_files = {'index.html': html_bytes, 'project.json': project_bytes}
         bundle_files.update({record['path']: data for record, data in asset_blobs})
+        bundle_files.update({record['path']: data for record, data in audio_blobs})
+        if naskah_bytes is not None:
+            bundle_files['naskah.json'] = naskah_bytes
+        if speech_timeline_bytes is not None:
+            bundle_files['speech_timeline.json'] = speech_timeline_bytes
+        if subtitle_bytes is not None:
+            bundle_files['subtitles.ass'] = subtitle_bytes
         manifest = {
             'schema_version': 1,
             'files': {
@@ -679,7 +998,20 @@ def _render_custom(store, run, directory, deadline):
             f'<video controls playsinline preload="metadata" src="{MEDIA[target]}"></video></html>',
             encoding='utf-8',
         )
-        return partial, {'source': 'source.zip', 'web_preview': 'web-preview.html'}
+        additional_artifacts = {'source': 'source.zip', 'web_preview': 'web-preview.html'}
+        if speech_timeline_path is not None:
+            _copy_regular_output(
+                speech_timeline_path, directory / 'speech_timeline.json', workspace=workspace,
+                max_bytes=4 * 1024 * 1024,
+            )
+            additional_artifacts['speech_timeline'] = 'speech_timeline.json'
+        if subtitle_path is not None:
+            _copy_regular_output(
+                subtitle_path, directory / 'subtitles.ass', workspace=workspace,
+                max_bytes=4 * 1024 * 1024,
+            )
+            additional_artifacts['subtitles'] = 'subtitles.ass'
+        return partial, additional_artifacts
     finally:
         if ffmpeg_process is not None and ffmpeg_process.stdin is not None:
             try:
@@ -687,7 +1019,7 @@ def _render_custom(store, run, directory, deadline):
             except OSError:
                 pass
             ffmpeg_process.stdin = None
-        for process, unit in ((node_process, node_unit), (ffmpeg_process, ffmpeg_unit)):
+        for process, unit in ((node_process, node_unit), (ffmpeg_process, ffmpeg_unit), (mux_process, mux_unit)):
             if process is not None and unit is not None and process.poll() is None:
                 try:
                     sandbox.wait_isolated(process, unit, timeout_s=3)
@@ -703,7 +1035,7 @@ def _render_custom(store, run, directory, deadline):
                         process.wait(timeout=5)
         for thread in drainers:
             thread.join(timeout=5)
-        for process in (node_process, ffmpeg_process):
+        for process in (node_process, ffmpeg_process, mux_process):
             if process is not None:
                 for stream in (process.stdin, process.stdout, process.stderr):
                     if stream is not None and not stream.closed:
@@ -856,7 +1188,7 @@ def execute_run(store: JobStore, run_id: str, argv=None):
             error = str(exc).replace(str(directory), '<run>').replace('\n', ' ')[:500]
             # Keep the diagnostic log; staged copies and partial media are never published.
             for name in ('frames.mp4', 'partial.mp4', 'preview.partial.mp4', 'final.partial.mp4',
-                         'source.zip', 'web-preview.html', *MEDIA.values(), *DOCS.values()):
+                         'source.zip', 'web-preview.html', 'speech_timeline.json', 'subtitles.ass', *MEDIA.values(), *DOCS.values()):
                 (directory / name).unlink(missing_ok=True)
             return _fail_if_running(store, run_id, error or type(exc).__name__)
 

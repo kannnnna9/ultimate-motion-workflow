@@ -388,6 +388,8 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual((revision_dir / "composition" / "index.html").read_text(encoding="utf-8"), composition["html"])
         expected_project = {key: value for key, value in composition.items() if key != "html"}
         expected_project["subtitle_mode"] = "none"
+        expected_project["draws_speech_text"] = False
+        expected_project["speech_anchors"] = []
         self.assertEqual(json.loads((revision_dir / "project.json").read_text(encoding="utf-8")), expected_project)
 
     def test_metadata_revision_rejects_tampered_composition_html(self):
@@ -591,6 +593,45 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(second_asset["version"], 2)
         self.assertEqual(pinned_file.read_bytes(), svg.encode("utf-8"))
 
+    def test_timing_composition_requires_and_pins_approved_naskah_hash(self):
+        job = self.store.create("speech-bound custom composition", mode="autonomous")
+        voice_data = b"speech source bytes"
+        record = audio_library_record(self.root, job["job_id"], "voice", "V" * 16, voice_data, kind="voice")
+        naskah = {"beats": [{"id": "b1", "narration": "Cakra Selaras Wahana."}]}
+        ref = {
+            "track_id": "voice", "blob_ref": record["blob_ref"], "kind": "voice",
+            "offset_ms": 0, "trim_start_ms": 0, "trim_end_ms": 10_000,
+            "gain_db": 0.0, "fade_in_ms": 0, "fade_out_ms": 0,
+        }
+        composition = {
+            "html": "<!doctype html><body>speech</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": True, "audio_tracks": [ref],
+            "subtitles_enabled": True, "subtitle_mode": "ass",
+            "draws_speech_text": False,
+            "speech_anchors": [{
+                "id": "anchor1", "word_id": "w00001", "action_id": "train-arrives", "offset_ms": 0,
+            }],
+        }
+        with self.assertRaises(DomainError) as missing:
+            self.store.write_composition(job["job_id"], job["rev"], composition)
+        self.assertEqual(missing.exception.code, "TRANSCRIPT_REQUIRED")
+
+        script_rev = self.store.revise(job["job_id"], job["rev"], {"naskah": naskah})
+        self.store.set_stage(job["job_id"], script_rev["rev"], "naskah_approved")
+        audio_rev = self.store.revise(job["job_id"], script_rev["rev"], {"audio_library": [record]})
+        created = self.store.write_composition(job["job_id"], audio_rev["rev"], composition)
+        project_path = self.root / "jobs" / job["job_id"] / "revisions" / str(created["rev"]) / "project.json"
+        project = json.loads(project_path.read_text(encoding="utf-8"))
+        expected = hashlib.sha256(json.dumps(naskah, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        self.assertEqual(project["approved_naskah_sha256"], expected)
+
+        changed = {"beats": [{"id": "b1", "narration": "Cakra sudah tiba."}]}
+        stale = self.store.revise(job["job_id"], created["rev"], {"naskah": changed})
+        with self.assertRaises(DomainError) as mismatch:
+            self.store.write_composition(job["job_id"], stale["rev"], composition)
+        self.assertEqual(mismatch.exception.code, "APPROVED_SCRIPT_CHANGED")
+
     def test_write_composition_pins_voice_and_bed_blobs_across_revisions(self):
         voice_data = b"immutable imported VO bytes"
         bed_data = b"immutable imported bed bytes"
@@ -742,6 +783,8 @@ class JobStoreTests(unittest.TestCase):
         first_html = first_dir / "composition" / "index.html"
         project = {key: value for key, value in composition.items() if key != "html"}
         project["subtitle_mode"] = "none"
+        project["draws_speech_text"] = False
+        project["speech_anchors"] = []
         self.assertEqual(first_html.read_text(encoding="utf-8"), composition["html"])
         self.assertEqual(json.loads((first_dir / "project.json").read_text(encoding="utf-8")), project)
         snapshot = json.loads((first_dir / "input.json").read_text(encoding="utf-8"))

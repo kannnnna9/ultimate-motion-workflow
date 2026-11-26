@@ -191,7 +191,23 @@ class AudioAttachmentTests(unittest.TestCase):
                         })
                     self.assertEqual(duplicate.exception.code, "AUDIO_TRACK_EXISTS")
 
-                voice_caption = f"UMP VO {job_id} 2"
+                store.set_stage(job_id, 2, "naskah_approved")
+                voice_track_caption = f"UMP AUDIO {job_id} 2 voice voice"
+                voice_track_message = SimpleNamespace(
+                    source=source, raw_message=SimpleNamespace(), message_id="message-voice-track",
+                    text=voice_track_caption, message_type="voice", media_urls=[str(upload)], media_types=["audio/wav"],
+                )
+                voice_track_key = (home, "42", "42", "message-voice-track")
+                upload.write_bytes(data)
+                with patch.object(tools, "_event_key", return_value=voice_track_key):
+                    tools.inbound(voice_track_message, gateway)
+                    voice_import = tools._job(store, "import_audio", {
+                        "job_id": job_id, "rev": 2, "track_id": "voice", "kind": "voice",
+                    })
+                self.assertEqual(voice_import["rev"], 3)
+                self.assertEqual(store.get(job_id)["stage"], "naskah_approved")
+
+                voice_caption = f"UMP VO {job_id} 3"
                 voice_message = SimpleNamespace(
                     source=source, raw_message=SimpleNamespace(), message_id="message-voice-1",
                     text=voice_caption, message_type="voice", media_urls=[str(upload)], media_types=["audio/wav"],
@@ -201,10 +217,10 @@ class AudioAttachmentTests(unittest.TestCase):
                 with patch.object(tools, "_event_key", return_value=voice_key):
                     tools.inbound(voice_message, gateway)
                     voice_result = tools._job(store, "revise", {
-                        "job_id": job_id, "rev": 2, "import_voice": True,
+                        "job_id": job_id, "rev": 3, "import_voice": True,
                     })
-                self.assertEqual(voice_result["rev"], 3)
-                voice_asset = store.get_revision_payload(job_id, 3)["voice_asset"]
+                self.assertEqual(voice_result["rev"], 4)
+                voice_asset = store.get_revision_payload(job_id, 4)["voice_asset"]
                 self.assertEqual((root / "jobs" / job_id / "voice" / voice_asset).read_bytes(), data)
 
                 unauthorized_key = (home, "42", "42", "message-unauthorized")

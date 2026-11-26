@@ -305,15 +305,43 @@ class JobStore:
             self._check_rev(row, rev)
             payload = json.loads(row["payload"])
             has_composition = isinstance(payload.get("composition"), dict)
-            allowed = {"composition_draft", "preview", "final_ready"} if has_composition else {"intake"}
+            allowed = {"composition_draft", "preview", "final_ready"} if has_composition else {"intake", "naskah_approved"}
             if row["stage"] not in allowed:
-                raise DomainError("STAGE_ORDER", "composition can only be written from intake or its own route")
+                raise DomainError("STAGE_ORDER", "composition can only be written from intake, approved script, or its own route")
             requirements = payload.get("requirements", {})
             checkpoints = requirements.get("checkpoints", []) if isinstance(requirements, dict) else []
             if any(checkpoint != "preview" for checkpoint in checkpoints):
                 raise DomainError("UNSUPPORTED_CHECKPOINT", "M1 composition supports the preview checkpoint")
 
             metadata = {key: item for key, item in composition.items() if key not in {"html", "assets", "audio_tracks"}}
+            needs_timing = composition["subtitle_mode"] == "ass" or bool(composition["speech_anchors"])
+            naskah_hash = None
+            naskah = payload.get("naskah")
+            if isinstance(naskah, dict):
+                try:
+                    encoded_naskah = json.dumps(
+                        naskah, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+                    ).encode("utf-8")
+                except (TypeError, ValueError, UnicodeEncodeError) as exc:
+                    raise DomainError("INVALID_NASKAH", "approved naskah is not canonical JSON") from exc
+                naskah_hash = hashlib.sha256(encoded_naskah).hexdigest()
+            if row["stage"] == "naskah_approved" and naskah_hash is not None:
+                metadata["approved_naskah_sha256"] = naskah_hash
+            elif needs_timing:
+                if naskah_hash is None:
+                    raise DomainError("TRANSCRIPT_REQUIRED", "speech timing requires an approved naskah")
+                old_metadata = payload.get("composition", {}).get("metadata", {}) if has_composition else {}
+                old_hash = old_metadata.get("approved_naskah_sha256") if isinstance(old_metadata, dict) else None
+                if old_hash is None:
+                    raise DomainError("TRANSCRIPT_REQUIRED", "timing requires a composition pinned from naskah_approved")
+                if old_hash != naskah_hash:
+                    raise DomainError("APPROVED_SCRIPT_CHANGED", "naskah differs from the approved speech source")
+                metadata["approved_naskah_sha256"] = old_hash
+            elif has_composition:
+                old_metadata = payload.get("composition", {}).get("metadata", {})
+                old_hash = old_metadata.get("approved_naskah_sha256") if isinstance(old_metadata, dict) else None
+                if old_hash is not None and old_hash == naskah_hash:
+                    metadata["approved_naskah_sha256"] = old_hash
             asset_blobs = []
             audio_blobs = []
             asset_refs = composition.get("assets", [])

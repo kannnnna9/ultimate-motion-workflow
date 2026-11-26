@@ -10,6 +10,99 @@ from ump_core import worker
 from ump_core.jobs import DomainError, JobStore
 
 
+class WorkerAudioContractTests(unittest.TestCase):
+    def test_speech_anchor_is_quantized_once_to_nearest_in_range_frame(self):
+        anchors = [
+            {"id": "a1", "word_id": "w00001", "action_id": "arrive", "at_ms": 201},
+            {"id": "a2", "word_id": "w00002", "action_id": "depart", "at_ms": 517},
+            {"id": "a3", "word_id": "w00003", "action_id": "end", "at_ms": 999},
+        ]
+        result = worker._quantize_speech_anchors(anchors, duration_frames=30, fps=30)
+        self.assertEqual([item["frame"] for item in result], [6, 16, 29])
+        self.assertEqual([item["at_ms"] for item in result], [201, 517, 999])
+
+    def test_unresolved_whisperx_uses_exact_text_fallback_or_fails_closed(self):
+        from ump_core.audio import validate_speech_timeline
+
+        audio_hash = "a" * 64
+        unresolved = validate_speech_timeline({
+            "schema_version": 1, "language": "id", "audio_sha256": audio_hash,
+            "provider": "whisperx", "model_id": "aligner", "model_revision": "rev1",
+            "status": "unresolved", "reason": "transcript_mismatch", "duration_ms": 1000, "words": [],
+            "approved_transcript": "Cakra.", "recognized_text": "Cakra.",
+        }, audio_sha256=audio_hash, duration_ms=1000)
+        aligned = validate_speech_timeline({
+            "schema_version": 1, "language": "id", "audio_sha256": audio_hash,
+            "provider": "faster-whisper", "model_id": "asr", "model_revision": "rev2",
+            "status": "estimated", "duration_ms": 1000,
+            "words": [{"id": "w00001", "text": "Cakra.", "start_ms": 100, "end_ms": 500,
+                       "speaker_id": None, "timing_status": "estimated"}],
+            "approved_transcript": "Cakra.", "recognized_text": "Cakra.",
+        }, audio_sha256=audio_hash, duration_ms=1000)
+        with patch.object(worker, "_run_alignment", side_effect=[unresolved, aligned]) as align:
+            result = worker._align_voice_timeline(
+                Path("/workspace"), Path("voice.wav"), Path("naskah.json"),
+                audio_sha256=audio_hash, duration_ms=1000, approved_text="Cakra.", deadline=9999999999,
+            )
+        self.assertEqual(result["provider"], "faster-whisper")
+        self.assertEqual(align.call_count, 2)
+
+        with patch.object(worker, "_run_alignment", side_effect=[unresolved, unresolved]):
+            with self.assertRaises(DomainError) as raised:
+                worker._align_voice_timeline(
+                    Path("/workspace"), Path("voice.wav"), Path("naskah.json"),
+                    audio_sha256=audio_hash, duration_ms=1000, approved_text="Cakra.", deadline=9999999999,
+                )
+        self.assertEqual(raised.exception.code, "SPEECH_ALIGNMENT_FAILED")
+
+    def test_mux_multiple_tracks_uses_one_bounded_amix(self):
+        project = {"duration_frames": 60, "fps": 30}
+        base = {
+            "sample_rate": 44100, "trim_start_ms": 0, "trim_end_ms": 2000,
+            "gain_db": 0.0, "fade_in_ms": 0, "fade_out_ms": 0,
+        }
+        tracks = [
+            {**base, "track_id": "voice", "offset_ms": 0},
+            {**base, "track_id": "bed", "offset_ms": 250, "gain_db": -20.0},
+        ]
+        argv = worker._build_custom_mux_argv(
+            Path("video.mp4"), [Path("voice.wav"), Path("bed.wav")], tracks,
+            Path("mix.mp4"), project,
+        )
+        joined = " ".join(argv)
+        self.assertIn("amix=inputs=2:duration=longest:normalize=0", joined)
+        self.assertIn("adelay=250:all=1", joined)
+        self.assertIn("apad=whole_dur=2.000000000", joined)
+        self.assertIn("-t 2.000000000", joined)
+
+    def test_timing_is_required_only_for_ass_or_visual_anchors(self):
+        self.assertFalse(worker._needs_speech_timing({"subtitle_mode": "none", "speech_anchors": []}))
+        self.assertFalse(worker._needs_speech_timing({"subtitle_mode": "none", "speech_anchors": [], "audio_enabled": True}))
+        self.assertTrue(worker._needs_speech_timing({"subtitle_mode": "ass", "speech_anchors": []}))
+        self.assertTrue(worker._needs_speech_timing({"subtitle_mode": "none", "speech_anchors": [{"id": "a"}]}))
+
+    def test_mux_filtergraph_applies_trim_gain_fades_offset_and_exact_duration(self):
+        project = {"duration_frames": 30, "fps": 30}
+        tracks = [{
+            "track_id": "voice", "path": "audio/voice.wav", "kind": "voice",
+            "sample_rate": 16000, "trim_start_ms": 100, "trim_end_ms": 900,
+            "offset_ms": 200, "gain_db": -6.0, "fade_in_ms": 100, "fade_out_ms": 100,
+        }]
+        argv = worker._build_custom_mux_argv(
+            Path("video-only.mp4"), [Path("voice.wav")], tracks, Path("final.partial.mp4"),
+            project, subtitle_filename="subtitles.ass",
+        )
+        joined = " ".join(argv)
+        self.assertIn("subtitles=filename=subtitles.ass", joined)
+        self.assertIn("atrim=start_sample=1600:end_sample=14400", joined)
+        self.assertIn("volume=-6.000dB", joined)
+        self.assertIn("afade=t=in:st=0:d=0.100000", joined)
+        self.assertIn("afade=t=out:st=0.700000:d=0.100000", joined)
+        self.assertIn("adelay=200:all=1", joined)
+        self.assertIn("-t 1.000000000", joined)
+        self.assertIn("48000", joined)
+
+
 class WorkerTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()

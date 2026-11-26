@@ -66,7 +66,10 @@ _EVENTS = {}
 _EVENT_LOCK = threading.Lock()
 _MAX_AUDIO = 20 * 1024 * 1024
 _MAX_IMAGE = 20 * 1024 * 1024
-_EXTRA_ARTIFACTS = {"source": "source.zip", "web_preview": "web-preview.html"}
+_EXTRA_ARTIFACTS = {
+    "source": "source.zip", "web_preview": "web-preview.html",
+    "speech_timeline": "speech_timeline.json", "subtitles": "subtitles.ass",
+}
 
 # action -> (stages it may start from, stage it lands in)
 # Every pipeline step is an explicit route; anything absent is INVALID_ACTION.
@@ -741,7 +744,7 @@ def _job(store, action, payload):
         source = _authorization(
             f'UMP AUDIO {job} {rev} {track_id} {kind}', None, None, 'ATTACHMENT_REQUIRED',
         )
-        if current['stage'] not in {'intake', 'composition_draft', 'preview', 'final_ready'}:
+        if current['stage'] not in {'intake', 'naskah_approved', 'composition_draft', 'preview', 'final_ready'}:
             raise DomainError('STAGE_ORDER', 'audio tracks can only be imported on the custom composition route')
         from .composition import MAX_AUDIO_TRACKS, validate_audio_library
         job_payload = store.get_revision_payload(job, rev)

@@ -14,6 +14,8 @@ VALID = {
     "audio_enabled": False,
     "subtitles_enabled": False,
     "subtitle_mode": "none",
+    "draws_speech_text": False,
+    "speech_anchors": [],
 }
 
 
@@ -37,6 +39,9 @@ AUDIO_TRACK = {
     "gain_db": -20.0,
     "fade_in_ms": 500,
     "fade_out_ms": 500,
+}
+SPEECH_ANCHOR = {
+    "id": "anchor1", "word_id": "w00001", "action_id": "train-arrives", "offset_ms": 0,
 }
 
 
@@ -151,6 +156,40 @@ class CompositionValidationTests(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(DomainError) as raised:
                 validate_composition(payload)
             self.assertEqual(raised.exception.code, "INVALID_COMPOSITION")
+
+    def test_accepts_speech_anchors_bound_to_a_voice_track(self):
+        voice = {**AUDIO_TRACK, "track_id": "voice", "blob_ref": "V" * 16, "kind": "voice"}
+        payload = {**VALID, "audio_enabled": True, "audio_tracks": [voice], "speech_anchors": [SPEECH_ANCHOR]}
+        self.assertEqual(validate_composition(payload), payload)
+
+    def test_rejects_anchors_without_voice_and_duplicate_speech_owners(self):
+        voice = {**AUDIO_TRACK, "track_id": "voice", "blob_ref": "V" * 16, "kind": "voice"}
+        cases = (
+            {**VALID, "speech_anchors": [SPEECH_ANCHOR]},
+            {**VALID, "audio_enabled": True, "audio_tracks": [AUDIO_TRACK], "speech_anchors": [SPEECH_ANCHOR]},
+            {
+                **VALID, "audio_enabled": True, "audio_tracks": [voice],
+                "subtitle_mode": "ass", "subtitles_enabled": True,
+                "draws_speech_text": True,
+            },
+        )
+        for payload in cases:
+            with self.subTest(payload=payload), self.assertRaises(DomainError):
+                validate_composition(payload)
+
+    def test_rejects_malformed_speech_anchor_specs(self):
+        cases = (
+            {**SPEECH_ANCHOR, "id": "../anchor"},
+            {**SPEECH_ANCHOR, "word_id": "../../word"},
+            {**SPEECH_ANCHOR, "action_id": "bad action"},
+            {**SPEECH_ANCHOR, "offset_ms": True},
+            {**SPEECH_ANCHOR, "offset_ms": 1001},
+            {**SPEECH_ANCHOR, "path": "../../etc/passwd"},
+        )
+        voice = {**AUDIO_TRACK, "track_id": "voice", "blob_ref": "V" * 16, "kind": "voice"}
+        for anchor in cases:
+            with self.subTest(anchor=anchor), self.assertRaises(DomainError):
+                validate_composition({**VALID, "audio_enabled": True, "audio_tracks": [voice], "speech_anchors": [anchor]})
 
     def test_accepts_bounded_voice_and_bed_tracks_when_audio_is_explicitly_enabled(self):
         voice = {**AUDIO_TRACK, "track_id": "voice", "blob_ref": "V" * 16, "kind": "voice", "gain_db": 0.0}

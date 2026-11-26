@@ -33,9 +33,14 @@ MAX_AUDIO_TRACKS = 8
 MAX_AUDIO_TRACK_BYTES = 20 * 1024 * 1024
 MAX_PINNED_AUDIO_BYTES = 80 * 1024 * 1024
 MAX_AUDIO_DURATION_MS = 600_000
+MAX_SPEECH_ANCHORS = 32
+MAX_SPEECH_ANCHOR_OFFSET_MS = 1_000
 _ASSET_ID = re.compile(r"[a-z][a-z0-9_-]{0,47}\Z")
 _AUDIO_TRACK_ID = re.compile(r"[a-z][a-z0-9_-]{0,47}\Z")
 _AUDIO_BLOB_REF = re.compile(r"[A-Za-z0-9_-]{16}\Z")
+_SPEECH_ANCHOR_ID = re.compile(r"[a-z][a-z0-9_-]{0,47}\Z")
+_SPEECH_WORD_ID = re.compile(r"w[0-9]{5}\Z")
+_SPEECH_ACTION_ID = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 _AUDIO_FORMATS = {
     ".mp3": {"media_type": "audio/mpeg", "source_format": "mp3", "format_names": {"mp3"}, "codecs": {"mp3"}},
     ".ogg": {"media_type": "audio/ogg", "source_format": "ogg", "format_names": {"ogg"}, "codecs": {"opus", "vorbis"}},
@@ -61,6 +66,23 @@ COMPOSITION_SCHEMA = {
         "audio_enabled": {"type": "boolean"},
         "subtitles_enabled": {"type": "boolean"},
         "subtitle_mode": {"type": "string", "enum": ["none", "ass"]},
+        "draws_speech_text": {"type": "boolean"},
+        "speech_anchors": {
+            "type": "array",
+            "maxItems": MAX_SPEECH_ANCHORS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,47}$"},
+                    "word_id": {"type": "string", "pattern": "^w[0-9]{5}$"},
+                    "action_id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+                    "offset_ms": {"type": "integer", "minimum": -MAX_SPEECH_ANCHOR_OFFSET_MS,
+                                   "maximum": MAX_SPEECH_ANCHOR_OFFSET_MS},
+                },
+                "required": ["id", "word_id", "action_id", "offset_ms"],
+                "additionalProperties": False,
+            },
+        },
         "assets": {
             "type": "array",
             "maxItems": _MAX_ASSET_REFERENCES,
@@ -147,9 +169,33 @@ def validate_audio_track_references(value: object, *, video_duration_ms: int) ->
     return result
 
 
+def validate_speech_anchor_specs(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        raise DomainError("INVALID_SPEECH_ANCHOR", "speech_anchors must be a list")
+    if len(value) > MAX_SPEECH_ANCHORS:
+        raise DomainError("SPEECH_ANCHOR_LIMIT_EXCEEDED", "at most 32 speech anchors are allowed")
+    fields = {"id", "word_id", "action_id", "offset_ms"}
+    seen: set[str] = set()
+    result = []
+    for spec in value:
+        if not isinstance(spec, dict) or set(spec) != fields:
+            raise DomainError("INVALID_SPEECH_ANCHOR", "anchor must contain exactly id, word_id, action_id, and offset_ms")
+        anchor_id, word_id, action_id, offset = (
+            spec.get("id"), spec.get("word_id"), spec.get("action_id"), spec.get("offset_ms"),
+        )
+        if (not isinstance(anchor_id, str) or not _SPEECH_ANCHOR_ID.fullmatch(anchor_id)
+                or anchor_id in seen or not isinstance(word_id, str) or not _SPEECH_WORD_ID.fullmatch(word_id)
+                or not isinstance(action_id, str) or not _SPEECH_ACTION_ID.fullmatch(action_id)
+                or type(offset) is not int or not -MAX_SPEECH_ANCHOR_OFFSET_MS <= offset <= MAX_SPEECH_ANCHOR_OFFSET_MS):
+            raise DomainError("INVALID_SPEECH_ANCHOR", "anchor ID, word ID, action ID, or offset is invalid")
+        seen.add(anchor_id)
+        result.append({"id": anchor_id, "word_id": word_id, "action_id": action_id, "offset_ms": offset})
+    return result
+
+
 def validate_composition(value: object) -> dict:
     if (not isinstance(value, dict) or not _COMPOSITION_FIELDS <= value.keys()
-            or value.keys() - (_COMPOSITION_FIELDS | {"assets", "audio_tracks", "subtitle_mode"})):
+            or value.keys() - (_COMPOSITION_FIELDS | {"assets", "audio_tracks", "subtitle_mode", "draws_speech_text", "speech_anchors"})):
         raise DomainError("INVALID_COMPOSITION", "expected only HTML and pinned composition metadata")
 
     html = value["html"]
@@ -206,8 +252,16 @@ def validate_composition(value: object) -> dict:
         audio_refs = validate_audio_track_references(
             raw_audio_tracks, video_duration_ms=video_duration_ms,
         )
+    draws_speech_text = value.get("draws_speech_text", False)
+    if type(draws_speech_text) is not bool:
+        raise DomainError("INVALID_COMPOSITION", "draws_speech_text must be boolean")
+    speech_anchors = validate_speech_anchor_specs(value.get("speech_anchors", []))
+    if subtitle_mode == "ass" and draws_speech_text:
+        raise DomainError("DUPLICATE_SUBTITLE_OWNER", "ASS and in-scene speech text cannot both be enabled")
     if subtitle_mode == "ass" and (not audio_enabled or not any(track["kind"] == "voice" for track in audio_refs)):
         raise DomainError("INVALID_COMPOSITION", "ASS subtitles require a voice audio track")
+    if speech_anchors and (not audio_enabled or not any(track["kind"] == "voice" for track in audio_refs)):
+        raise DomainError("SPEECH_ANCHOR_REQUIRES_VOICE", "speech anchors require an enabled voice track")
 
     assets = value.get("assets", [])
     if not isinstance(assets, list) or len(assets) > _MAX_ASSET_REFERENCES:
@@ -229,6 +283,8 @@ def validate_composition(value: object) -> dict:
         "html", "width", "height", "fps", "duration_frames", "audio_enabled", "subtitles_enabled"
     )}
     result["subtitle_mode"] = subtitle_mode
+    result["draws_speech_text"] = draws_speech_text
+    result["speech_anchors"] = speech_anchors
     if asset_refs:
         result["assets"] = asset_refs
     if audio_refs:

@@ -7,7 +7,12 @@ import { chromium } from 'playwright-core';
 const args = process.argv.slice(2);
 const probeMode = args[0] === '--probe-seeks';
 if (probeMode) args.shift();
-const [htmlArg, projectArg, probeDirArg, timesArg] = args;
+let htmlArg, projectArg, probeDirArg, timesArg, timelineArg;
+if (probeMode) {
+  [htmlArg, projectArg, probeDirArg, timesArg, timelineArg] = args;
+} else {
+  [htmlArg, projectArg, timelineArg] = args;
+}
 
 
 function fail(message) {
@@ -33,15 +38,79 @@ async function isAllowedWorkspaceFile(url, root) {
 function readProject(file) {
   const project = JSON.parse(fs.readFileSync(file, 'utf8'));
   const { width, height, fps, duration_frames: durationFrames } = project;
+  const audioEnabled = project.audio_enabled;
+  const subtitleMode = project.subtitle_mode ?? (project.subtitles_enabled === false ? 'none' : null);
+  const drawsSpeechText = project.draws_speech_text ?? false;
+  const tracks = project.audio_tracks ?? [];
+  const speechAnchors = project.speech_anchors ?? [];
   if (width !== 1080 || height !== 1920 || fps !== 30 ||
       !Number.isInteger(durationFrames) || durationFrames < 1 || durationFrames > 1800 ||
-      project.audio_enabled !== false || project.subtitles_enabled !== false) {
+      typeof audioEnabled !== 'boolean' || typeof drawsSpeechText !== 'boolean' ||
+      !['none', 'ass'].includes(subtitleMode) || !Array.isArray(tracks) || !Array.isArray(speechAnchors) ||
+      project.subtitles_enabled !== (subtitleMode === 'ass') ||
+      (subtitleMode === 'ass' && drawsSpeechText)) {
     fail('invalid custom project metadata');
   }
-  return { width, height, fps, durationFrames };
+  const voiceTracks = tracks.filter(track => track?.kind === 'voice');
+  const needsTimeline = subtitleMode === 'ass' || speechAnchors.length > 0;
+  if ((audioEnabled && tracks.length === 0) || (!audioEnabled && tracks.length > 0) ||
+      (needsTimeline && (!audioEnabled || voiceTracks.length !== 1))) {
+    fail('invalid audio or speech-track configuration');
+  }
+  return { width, height, fps, durationFrames, audioEnabled, subtitleMode, drawsSpeechText,
+    speechAnchors, voiceTrack: voiceTracks[0] || null, needsTimeline };
 }
 
-async function openScene(htmlPath, meta, state, workspace) {
+function readTimeline(file, metadata, workspace) {
+  if (!metadata.needsTimeline) {
+    if (file) fail('unexpected speech timeline for a bypass render');
+    return null;
+  }
+  if (!file) fail('audio timing requires a timeline data file');
+  const candidate = path.resolve(file);
+  if (!within(workspace, candidate)) fail('timeline input must remain inside the private workspace');
+  const info = fs.lstatSync(candidate);
+  if (!info.isFile() || info.isSymbolicLink() || info.size > 4 * 1024 * 1024 || fs.realpathSync(candidate) !== candidate) {
+    fail('timeline input must be a bounded regular workspace file');
+  }
+  const payload = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+  if (!payload || typeof payload !== 'object' ||
+      Object.keys(payload).sort().join(',') !== 'anchors,audio_sha256,words' ||
+      payload.audio_sha256 !== metadata.voiceTrack?.sha256 ||
+      !Array.isArray(payload.words) || payload.words.length === 0 ||
+      !Array.isArray(payload.anchors) || payload.anchors.length !== metadata.speechAnchors.length) {
+    fail('timeline data does not match the pinned voice track or anchor set');
+  }
+  const wordsById = new Map();
+  for (const word of payload.words) {
+    if (!word || typeof word.id !== 'string' || typeof word.text !== 'string' ||
+        !Number.isInteger(word.start_ms) || !Number.isInteger(word.end_ms) ||
+        word.start_ms < 0 || word.start_ms >= word.end_ms || word.end_ms > metadata.voiceTrack.duration_ms ||
+        wordsById.has(word.id)) {
+      fail('timeline contains an invalid word range');
+    }
+    wordsById.set(word.id, word);
+  }
+  const anchorIds = new Set();
+  for (const anchor of payload.anchors) {
+    const spec = metadata.speechAnchors.find(item => item.id === anchor?.id);
+    const word = anchor && wordsById.get(anchor.word_id);
+    const expectedAt = spec && word ? word.start_ms + spec.offset_ms : null;
+    const expectedFrame = expectedAt === null ? null : Math.min(
+      Math.max(Math.floor(expectedAt * metadata.fps / 1000 + 0.5), 0), metadata.durationFrames - 1,
+    );
+    if (!anchor || !spec || !word || anchor.word_id !== spec.word_id || anchor.action_id !== spec.action_id ||
+        anchor.at_ms !== expectedAt || anchor.frame !== expectedFrame ||
+        anchor.frame_time_ms !== Math.floor(anchor.frame * 1000 / metadata.fps + 0.5) ||
+        anchorIds.has(anchor.id)) {
+      fail('timeline contains an invalid visual anchor');
+    }
+    anchorIds.add(anchor.id);
+  }
+  return { words: payload.words, anchors: payload.anchors };
+}
+
+async function openScene(htmlPath, meta, state, workspace, timelineData) {
   const compositionRoot = await fs.promises.realpath(path.dirname(htmlPath));
   const executablePath = ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']
     .find(candidate => fs.existsSync(candidate));
@@ -94,17 +163,21 @@ async function openScene(htmlPath, meta, state, workspace) {
       undefined,
       { timeout: 30000 },
     );
-    const reported = await page.evaluate(async () => {
-      await window.UMP.ready();
-      await document.fonts.ready;
+    const reported = await page.evaluate(async timeline => {
       const api = window.UMP;
+      await api.ready();
+      if (timeline !== null) {
+        if (typeof api.setTimeline !== 'function') throw new Error('audio timing requires window.UMP.setTimeline');
+        await api.setTimeline(timeline);
+      }
+      await document.fonts.ready;
       return {
         width: api.width,
         height: api.height,
         fps: api.fps,
         durationFrames: api.durationFrames,
       };
-    });
+    }, timelineData);
     if (reported.width !== meta.width || reported.height !== meta.height ||
         reported.fps !== meta.fps || reported.durationFrames !== meta.durationFrames) {
       fail(`window.UMP metadata mismatch: ${JSON.stringify(reported)}`);
@@ -148,18 +221,20 @@ function writeStdout(buffer) {
 }
 
 async function main() {
-  if ((!probeMode && args.length !== 2) || (probeMode && args.length !== 4)) {
-    fail('usage: record_custom.mjs <index.html> <project.json> | --probe-seeks <index.html> <project.json> <out-dir> <times>');
+  if ((!probeMode && ![2, 3].includes(args.length)) || (probeMode && ![4, 5].includes(args.length))) {
+    fail('usage: record_custom.mjs <index.html> <project.json> [timeline.json] | --probe-seeks <index.html> <project.json> <out-dir> <times> [timeline.json]');
   }
   const workspace = path.resolve(process.cwd());
   const htmlPath = path.resolve(htmlArg);
   const projectPath = path.resolve(projectArg);
   const probeDir = probeMode ? path.resolve(probeDirArg) : null;
+  const timingPath = timelineArg ? path.resolve(timelineArg) : null;
   if (!within(workspace, htmlPath) || !within(workspace, projectPath) ||
-      (probeDir && !within(workspace, probeDir))) {
+      (probeDir && !within(workspace, probeDir)) || (timingPath && !within(workspace, timingPath))) {
     fail('recorder paths must remain inside its private workspace');
   }
   const meta = readProject(projectPath);
+  const timelineData = readTimeline(timingPath, meta, workspace);
   if (!fs.statSync(htmlPath).isFile()) fail('composition HTML is missing');
   let probeTimes = [];
   if (probeMode) {
@@ -171,7 +246,7 @@ async function main() {
   }
 
   const state = { externalRequests: new Set(), localFileRequests: new Set(), pageErrors: [], consoleErrors: [] };
-  const { context, page } = await openScene(htmlPath, meta, state, workspace);
+  const { context, page } = await openScene(htmlPath, meta, state, workspace, timelineData);
 
   try {
     if (probeMode) {
