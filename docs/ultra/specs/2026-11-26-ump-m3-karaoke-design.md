@@ -53,6 +53,7 @@ The desired result is word-by-word karaoke highlighting that follows the real, v
 
 - `ump_core/composition.py`: subtitle mode/effect schema, compatibility normalization, single-owner and voice requirements.
 - `ump_core/subtitles.py`: deterministic phrase grouping, karaoke subtitle document generation/validation, word-selection behavior; keep ASS renderer intact.
+- `ump_core/jobs.py`: treat web karaoke as a timing-required mode so the approved script hash is pinned when the composition revision is written.
 - `ump_core/worker.py`: web-karaoke artifact creation, source manifest/bundle inclusion, one-owner render handoff, output artifact registration, clean failure semantics.
 - `scripts/record_custom.mjs`: validate the karaoke handoff, mount/update the overlay from absolute frame time, maintain deterministic seeks and offline capture.
 - `tests/test_subtitles.py`, `tests/test_composition.py`, `tests/test_worker.py`, `tests/test_custom_renderer.py`: schema/bypass/ownership, group balancing, start/end/gap/reverse-seek transitions, rendered overlay and artifact/hash integration.
