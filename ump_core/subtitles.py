@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 import unicodedata
@@ -91,19 +92,30 @@ def _ends_sentence(text: str) -> bool:
 def _cue_groups(words: list[dict[str, Any]], max_words: int) -> list[list[dict[str, Any]]]:
     groups: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
+
+    def append_balanced(segment: list[dict[str, Any]]) -> None:
+        while len(segment) > max_words:
+            take = max_words
+            if take > 1 and len(segment) - take == 1:
+                take -= 1
+            groups.append(segment[:take])
+            segment = segment[take:]
+        if segment:
+            groups.append(segment)
+
     for word in words:
         text = word["text"]
         if any(unicodedata.category(char) == "Cc" or char in "\u2028\u2029" for char in text):
             raise ValueError("word text cannot contain control or line-separator characters")
         if current and word["start_ms"] - current[-1]["end_ms"] > _MAX_CUE_GAP_MS:
-            groups.append(current)
+            append_balanced(current)
             current = []
         current.append(word)
-        if len(current) >= max_words or _ends_sentence(text):
-            groups.append(current)
+        if _ends_sentence(text):
+            append_balanced(current)
             current = []
     if current:
-        groups.append(current)
+        append_balanced(current)
     return groups
 
 
@@ -200,6 +212,63 @@ def render_ass(
     if any(word["timing_status"] == "unresolved" for word in validated["words"]):
         raise ValueError("unresolved word timing cannot create ASS subtitles")
     return _serialize_ass(validated["words"], validated_style, width=width, height=height)
+
+
+def render_karaoke_subtitles(
+    timeline: Mapping[str, Any],
+    *,
+    audio_sha256: str,
+    track_duration_ms: int,
+    width: int = 1080,
+    height: int = 1920,
+) -> bytes:
+    if not isinstance(audio_sha256, str) or not _SHA256.fullmatch(audio_sha256):
+        raise ValueError("audio_sha256 must be lowercase SHA-256 hex")
+    if type(track_duration_ms) is not int or track_duration_ms < 1:
+        raise ValueError("track_duration_ms must be a positive integer")
+    width = _integer(width, "width", minimum=1, maximum=_MAX_ASS_DIMENSION)
+    height = _integer(height, "height", minimum=1, maximum=_MAX_ASS_DIMENSION)
+    style = _validate_style(MOBILE_ASS_STYLE, width=width, height=height)
+    validated = validate_speech_timeline(
+        timeline, audio_sha256=audio_sha256, duration_ms=track_duration_ms,
+    )
+    if validated["status"] == "unresolved":
+        raise ValueError("unresolved speech timing cannot create karaoke subtitles")
+    if not validated["words"]:
+        raise ValueError("karaoke subtitles require at least one timed word")
+    if any(word["timing_status"] == "unresolved" for word in validated["words"]):
+        raise ValueError("unresolved word timing cannot create karaoke subtitles")
+
+    style_document = {
+        **style,
+        "inactive_color": "#FFFFFF",
+        "active_color": "#FE7945",
+        "outline_color": "#000000",
+    }
+    groups = []
+    for index, group in enumerate(_cue_groups(validated["words"], style["max_words_per_cue"]), start=1):
+        groups.append({
+            "id": f"g{index:04d}",
+            "start_ms": group[0]["start_ms"],
+            "end_ms": group[-1]["end_ms"],
+            "words": [
+                {key: word[key] for key in ("id", "text", "start_ms", "end_ms")}
+                for word in group
+            ],
+        })
+    document = {
+        "schema_version": 1,
+        "mode": "web",
+        "effect": "karaoke",
+        "audio_sha256": audio_sha256,
+        "duration_ms": track_duration_ms,
+        "canvas": {"width": width, "height": height},
+        "style": style_document,
+        "groups": groups,
+    }
+    return json.dumps(
+        document, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8", "strict")
 
 
 def render_subtitles(

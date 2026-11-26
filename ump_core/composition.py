@@ -65,7 +65,8 @@ COMPOSITION_SCHEMA = {
         "duration_frames": {"type": "integer", "minimum": 1, "maximum": MAX_DURATION_FRAMES},
         "audio_enabled": {"type": "boolean"},
         "subtitles_enabled": {"type": "boolean"},
-        "subtitle_mode": {"type": "string", "enum": ["none", "ass"]},
+        "subtitle_mode": {"type": "string", "enum": ["none", "ass", "web"]},
+        "subtitle_effect": {"type": ["string", "null"], "enum": ["karaoke", None]},
         "draws_speech_text": {"type": "boolean"},
         "speech_anchors": {
             "type": "array",
@@ -195,7 +196,10 @@ def validate_speech_anchor_specs(value: object) -> list[dict]:
 
 def validate_composition(value: object) -> dict:
     if (not isinstance(value, dict) or not _COMPOSITION_FIELDS <= value.keys()
-            or value.keys() - (_COMPOSITION_FIELDS | {"assets", "audio_tracks", "subtitle_mode", "draws_speech_text", "speech_anchors"})):
+            or value.keys() - (_COMPOSITION_FIELDS | {
+                "assets", "audio_tracks", "subtitle_mode", "subtitle_effect",
+                "draws_speech_text", "speech_anchors",
+            })):
         raise DomainError("INVALID_COMPOSITION", "expected only HTML and pinned composition metadata")
 
     html = value["html"]
@@ -236,10 +240,16 @@ def validate_composition(value: object) -> dict:
         subtitle_mode = "none"
     else:
         subtitle_mode = value["subtitle_mode"]
-        if not isinstance(subtitle_mode, str) or subtitle_mode not in {"none", "ass"}:
-            raise DomainError("INVALID_COMPOSITION", "subtitle_mode must be none or ass")
-        if subtitle_enabled is not (subtitle_mode == "ass"):
+        if not isinstance(subtitle_mode, str) or subtitle_mode not in {"none", "ass", "web"}:
+            raise DomainError("INVALID_COMPOSITION", "subtitle_mode must be none, ass, or web")
+        if subtitle_enabled is not (subtitle_mode != "none"):
             raise DomainError("INVALID_COMPOSITION", "subtitles_enabled must match subtitle_mode")
+    subtitle_effect = value.get("subtitle_effect")
+    if subtitle_mode == "web":
+        if subtitle_effect != "karaoke":
+            raise DomainError("INVALID_COMPOSITION", "web subtitle_mode requires subtitle_effect=karaoke")
+    elif subtitle_effect is not None:
+        raise DomainError("INVALID_COMPOSITION", "subtitle_effect is only valid with web subtitle_mode")
     video_duration_ms = frames * 1000 // 30
     raw_audio_tracks = value.get("audio_tracks", [])
     if not audio_enabled:
@@ -256,10 +266,10 @@ def validate_composition(value: object) -> dict:
     if type(draws_speech_text) is not bool:
         raise DomainError("INVALID_COMPOSITION", "draws_speech_text must be boolean")
     speech_anchors = validate_speech_anchor_specs(value.get("speech_anchors", []))
-    if subtitle_mode == "ass" and draws_speech_text:
-        raise DomainError("DUPLICATE_SUBTITLE_OWNER", "ASS and in-scene speech text cannot both be enabled")
-    if subtitle_mode == "ass" and (not audio_enabled or not any(track["kind"] == "voice" for track in audio_refs)):
-        raise DomainError("INVALID_COMPOSITION", "ASS subtitles require a voice audio track")
+    if subtitle_mode in {"ass", "web"} and draws_speech_text:
+        raise DomainError("DUPLICATE_SUBTITLE_OWNER", "subtitle renderer and in-scene speech text cannot both be enabled")
+    if subtitle_mode in {"ass", "web"} and (not audio_enabled or not any(track["kind"] == "voice" for track in audio_refs)):
+        raise DomainError("INVALID_COMPOSITION", "speech subtitles require a voice audio track")
     if speech_anchors and (not audio_enabled or not any(track["kind"] == "voice" for track in audio_refs)):
         raise DomainError("SPEECH_ANCHOR_REQUIRES_VOICE", "speech anchors require an enabled voice track")
 
@@ -283,6 +293,7 @@ def validate_composition(value: object) -> dict:
         "html", "width", "height", "fps", "duration_frames", "audio_enabled", "subtitles_enabled"
     )}
     result["subtitle_mode"] = subtitle_mode
+    result["subtitle_effect"] = subtitle_effect
     result["draws_speech_text"] = draws_speech_text
     result["speech_anchors"] = speech_anchors
     if asset_refs:

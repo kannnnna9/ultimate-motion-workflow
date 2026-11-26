@@ -314,7 +314,7 @@ class JobStore:
                 raise DomainError("UNSUPPORTED_CHECKPOINT", "M1 composition supports the preview checkpoint")
 
             metadata = {key: item for key, item in composition.items() if key not in {"html", "assets", "audio_tracks"}}
-            needs_timing = composition["subtitle_mode"] == "ass" or bool(composition["speech_anchors"])
+            needs_timing = composition["subtitle_mode"] in {"ass", "web"} or bool(composition["speech_anchors"])
             naskah_hash = None
             naskah = payload.get("naskah")
             if isinstance(naskah, dict):

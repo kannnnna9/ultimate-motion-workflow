@@ -1,4 +1,7 @@
+import json
 import unittest
+
+import ump_core.subtitles as subtitle_module
 
 from ump_core.subtitles import MOBILE_ASS_STYLE, render_ass, render_subtitles
 
@@ -25,6 +28,22 @@ def speech_timeline(*, duration_ms=5000, words=None):
              "speaker_id": None, "timing_status": "aligned"},
         ],
     }
+
+
+def long_name_timeline(*, duration_ms=18000):
+    words = [
+        {"id": f"w{i:05d}", "text": text, "start_ms": start, "end_ms": end,
+         "speaker_id": None, "timing_status": "aligned"}
+        for i, (text, start, end) in enumerate((
+            ("dengan", 10907, 11087),
+            ("pemberhentian", 11147, 11688),
+            ("di", 11748, 11808),
+            ("Halte", 11868, 12108),
+            ("Kejaksaan", 12128, 12608),
+            ("Agung.", 12648, 14049),
+        ), start=29)
+    ]
+    return speech_timeline(duration_ms=duration_ms, words=words)
 
 
 class SubtitleRendererTests(unittest.TestCase):
@@ -58,6 +77,55 @@ class SubtitleRendererTests(unittest.TestCase):
         ).decode("utf-8")
         self.assertIn("WrapStyle:0", decoded)
         self.assertIn(",64,64,230,1", decoded)
+
+    def test_ass_rebalances_terminal_singleton_and_keeps_kejaksaan_agung_together(self):
+        decoded = self.render(
+            long_name_timeline(), track_duration_ms=18000,
+        ).decode("utf-8")
+        dialogue = [line for line in decoded.splitlines() if line.startswith("Dialogue:")]
+        self.assertEqual(len(dialogue), 2)
+        self.assertTrue(dialogue[0].endswith(",dengan pemberhentian di Halte"))
+        self.assertTrue(dialogue[1].endswith(",Kejaksaan Agung."))
+
+    def test_single_word_cue_limit_does_not_loop(self):
+        style = {**MOBILE_ASS_STYLE, "max_words_per_cue": 1}
+        decoded = self.render(style=style).decode("utf-8")
+        dialogue = [line for line in decoded.splitlines() if line.startswith("Dialogue:")]
+        self.assertEqual(len(dialogue), 3)
+        self.assertTrue(all(line.rsplit(",", 1)[-1].strip() for line in dialogue))
+
+    def test_karaoke_sidecar_is_deterministic_word_bound_and_has_mobile_default_style(self):
+        timeline = long_name_timeline()
+        render = subtitle_module.render_karaoke_subtitles
+        output = render(timeline, audio_sha256=AUDIO_SHA256, track_duration_ms=18000)
+        document = json.loads(output)
+        groups = [[word["text"] for word in group["words"]] for group in document["groups"]]
+        self.assertEqual(groups, [["dengan", "pemberhentian", "di", "Halte"], ["Kejaksaan", "Agung."]])
+        self.assertEqual(document["audio_sha256"], AUDIO_SHA256)
+        self.assertEqual(document["duration_ms"], 18000)
+        self.assertEqual(document["groups"][1]["words"][0]["start_ms"], 12128)
+        self.assertEqual(document["groups"][1]["words"][1]["end_ms"], 14049)
+        self.assertEqual(document["style"]["font_name"], "DejaVu Sans")
+        self.assertEqual(document["style"]["font_size"], 56)
+        self.assertEqual(document["style"]["active_color"], "#FE7945")
+        self.assertEqual(document["style"]["inactive_color"], "#FFFFFF")
+        self.assertEqual(output, render(timeline, audio_sha256=AUDIO_SHA256, track_duration_ms=18000))
+
+    def test_karaoke_sidecar_rejects_stale_hash_and_invalid_word_ranges(self):
+        render = subtitle_module.render_karaoke_subtitles
+        timeline = long_name_timeline()
+        with self.assertRaises(ValueError):
+            render(timeline, audio_sha256="b" * 64, track_duration_ms=18000)
+
+        too_short = long_name_timeline(duration_ms=14000)
+        with self.assertRaises(ValueError):
+            render(too_short, audio_sha256=AUDIO_SHA256, track_duration_ms=14000)
+
+        malformed = long_name_timeline()
+        malformed["words"][-1]["start_ms"] = 14049
+        malformed["words"][-1]["end_ms"] = 14049
+        with self.assertRaises(ValueError):
+            render(malformed, audio_sha256=AUDIO_SHA256, track_duration_ms=18000)
 
     def test_none_mode_returns_no_subtitle_artifact(self):
         self.assertIsNone(render_subtitles("none", None, None))

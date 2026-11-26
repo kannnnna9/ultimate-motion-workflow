@@ -14,6 +14,7 @@ VALID = {
     "audio_enabled": False,
     "subtitles_enabled": False,
     "subtitle_mode": "none",
+    "subtitle_effect": None,
     "draws_speech_text": False,
     "speech_anchors": [],
 }
@@ -129,9 +130,13 @@ class CompositionValidationTests(unittest.TestCase):
                 self.assertEqual(raised.exception.code, "INVALID_COMPOSITION")
 
     def test_m1_subtitle_boolean_normalizes_to_none_mode(self):
-        legacy_payload = {key: value for key, value in VALID.items() if key != "subtitle_mode"}
+        legacy_payload = {
+            key: value for key, value in VALID.items()
+            if key not in {"subtitle_mode", "subtitle_effect"}
+        }
         normalized = validate_composition(legacy_payload)
         self.assertEqual(normalized["subtitle_mode"], "none")
+        self.assertIsNone(normalized["subtitle_effect"])
         self.assertIs(normalized["subtitles_enabled"], False)
 
     def test_ass_subtitle_mode_requires_voice_audio_and_matching_boolean(self):
@@ -142,7 +147,33 @@ class CompositionValidationTests(unittest.TestCase):
         }
         normalized = validate_composition(payload)
         self.assertEqual(normalized["subtitle_mode"], "ass")
+        self.assertIsNone(normalized["subtitle_effect"])
         self.assertIs(normalized["subtitles_enabled"], True)
+
+    def test_web_karaoke_mode_requires_voice_and_exclusive_subtitle_owner(self):
+        voice = {**AUDIO_TRACK, "track_id": "voice", "blob_ref": "V" * 16, "kind": "voice"}
+        payload = {
+            **VALID, "audio_enabled": True, "audio_tracks": [voice],
+            "subtitles_enabled": True, "subtitle_mode": "web", "subtitle_effect": "karaoke",
+        }
+        normalized = validate_composition(payload)
+        self.assertEqual(normalized["subtitle_mode"], "web")
+        self.assertEqual(normalized["subtitle_effect"], "karaoke")
+        self.assertIs(normalized["subtitles_enabled"], True)
+
+        bed = {**AUDIO_TRACK, "track_id": "bed", "kind": "music"}
+        invalid = (
+            {**payload, "subtitle_effect": None},
+            {**payload, "draws_speech_text": True},
+            {**VALID, "subtitles_enabled": True, "subtitle_mode": "web", "subtitle_effect": "karaoke"},
+            {**VALID, "audio_enabled": True, "audio_tracks": [bed], "subtitles_enabled": True,
+             "subtitle_mode": "web", "subtitle_effect": "karaoke"},
+            {**payload, "subtitle_mode": "ass", "subtitle_effect": "karaoke"},
+            {**VALID, "subtitle_effect": "karaoke"},
+        )
+        for composition in invalid:
+            with self.subTest(composition=composition), self.assertRaises(DomainError):
+                validate_composition(composition)
 
     def test_rejects_ass_without_voice_or_conflicting_mode(self):
         bed = {**AUDIO_TRACK, "track_id": "bed", "kind": "music"}

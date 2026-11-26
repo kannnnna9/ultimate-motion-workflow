@@ -388,6 +388,7 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual((revision_dir / "composition" / "index.html").read_text(encoding="utf-8"), composition["html"])
         expected_project = {key: value for key, value in composition.items() if key != "html"}
         expected_project["subtitle_mode"] = "none"
+        expected_project["subtitle_effect"] = None
         expected_project["draws_speech_text"] = False
         expected_project["speech_anchors"] = []
         self.assertEqual(json.loads((revision_dir / "project.json").read_text(encoding="utf-8")), expected_project)
@@ -593,6 +594,44 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(second_asset["version"], 2)
         self.assertEqual(pinned_file.read_bytes(), svg.encode("utf-8"))
 
+    def test_web_karaoke_requires_and_pins_approved_naskah_hash_without_anchor(self):
+        job = self.store.create("web-karaoke script binding", mode="autonomous")
+        voice_data = b"speech source bytes"
+        record = audio_library_record(self.root, job["job_id"], "voice", "W" * 16, voice_data, kind="voice")
+        naskah = {"beats": [{"id": "b1", "narration": "Kejaksaan Agung."}]}
+        reference = {
+            "track_id": "voice", "blob_ref": record["blob_ref"], "kind": "voice",
+            "offset_ms": 0, "trim_start_ms": 0, "trim_end_ms": 1000,
+            "gain_db": 0.0, "fade_in_ms": 0, "fade_out_ms": 0,
+        }
+        composition = {
+            "html": "<!doctype html><body>karaoke</body>",
+            "width": 1080, "height": 1920, "fps": 30, "duration_frames": 30,
+            "audio_enabled": True, "audio_tracks": [reference],
+            "subtitles_enabled": True, "subtitle_mode": "web", "subtitle_effect": "karaoke",
+            "draws_speech_text": False, "speech_anchors": [],
+        }
+        with self.assertRaises(DomainError) as missing:
+            self.store.write_composition(job["job_id"], job["rev"], composition)
+        self.assertEqual(missing.exception.code, "TRANSCRIPT_REQUIRED")
+
+        script_rev = self.store.revise(job["job_id"], job["rev"], {"naskah": naskah})
+        self.store.set_stage(job["job_id"], script_rev["rev"], "naskah_approved")
+        audio_rev = self.store.revise(job["job_id"], script_rev["rev"], {"audio_library": [record]})
+        created = self.store.write_composition(job["job_id"], audio_rev["rev"], composition)
+        revision = self.root / "jobs" / job["job_id"] / "revisions" / str(created["rev"])
+        project = json.loads((revision / "project.json").read_text(encoding="utf-8"))
+        approved_hash = hashlib.sha256(
+            json.dumps(naskah, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(project["subtitle_mode"], "web")
+        self.assertEqual(project["subtitle_effect"], "karaoke")
+        self.assertEqual(project["approved_naskah_sha256"], approved_hash)
+
+        revised = self.store.revise(job["job_id"], created["rev"], {"brief": "metadata revision"})
+        copied_project = self.root / "jobs" / job["job_id"] / "revisions" / str(revised["rev"]) / "project.json"
+        self.assertEqual(json.loads(copied_project.read_text(encoding="utf-8")), project)
+
     def test_timing_composition_requires_and_pins_approved_naskah_hash(self):
         job = self.store.create("speech-bound custom composition", mode="autonomous")
         voice_data = b"speech source bytes"
@@ -783,6 +822,7 @@ class JobStoreTests(unittest.TestCase):
         first_html = first_dir / "composition" / "index.html"
         project = {key: value for key, value in composition.items() if key != "html"}
         project["subtitle_mode"] = "none"
+        project["subtitle_effect"] = None
         project["draws_speech_text"] = False
         project["speech_anchors"] = []
         self.assertEqual(first_html.read_text(encoding="utf-8"), composition["html"])

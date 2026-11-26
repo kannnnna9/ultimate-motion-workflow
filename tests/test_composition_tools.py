@@ -62,6 +62,8 @@ class CompositionToolTests(unittest.TestCase):
         value = payload["properties"]["value"]
         self.assertFalse(value["additionalProperties"])
         self.assertNotIn("path", value["properties"])
+        self.assertIn("web", value["properties"]["subtitle_mode"]["enum"])
+        self.assertEqual(value["properties"]["subtitle_effect"]["enum"], ["karaoke", None])
 
     def test_composition_dispatch_rejects_path_fields(self):
         job = self.store.create("path rejection")
