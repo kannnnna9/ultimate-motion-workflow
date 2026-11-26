@@ -1,7 +1,7 @@
 # ledger — plan: docs/ultra/plans/2026-11-26-ump-v2.0-m2-assets.md
 
 - Task 1: complete (commit `58683e0`; tests: `test_assets.py` 30/30 + `test_composition_tools.py` 9/9 + `test_storyboard.py` 8/8 → PASS; compileall and `git diff --check` → PASS).
-- Task 2: pending
+- Task 2: in progress — plan now includes locked `AssetStore.resolve`, optional `{id, version}` validation, immutable revision manifests/copies, sandbox staging, and asset-aware source ZIP; beginning RED tests.
 - Task 3: pending
 - Task 4: pending
 
@@ -13,3 +13,4 @@
 - Task 1 Ruling: `locked` freezes the content hash, not metadata; same-byte metadata corrections append a new immutable version that inherits the lock, preserving history while allowing provenance/license corrections. Cost if wrong: use a new ID if lock was intended to freeze metadata too.
 - Task 1 Ruling: cap stored asset bytes at 128 MiB and version/file count at 256, counting orphan/temp files and never auto-deleting immutable data; keep aggregate DATA_ROOT retention/quota in M0. Cost if wrong: the asset cap may be reached early, or crash leftovers may need operator cleanup.
 - Task 1 Ruling: recover same-hash orphan blobs under the catalogue lock and skip conflicting version paths rather than overwrite/delete them. Cost if wrong: history may have version gaps and unindexed conflicting orphans remain for manual cleanup.
+- Plan change: Task 2 adds `AssetStore.resolve` and tests because pinning exact bytes safely needs a public, lock-held catalog read; omitted/empty asset lists stay absent from metadata to preserve M1. Cost if wrong: the helper broadens the asset API, or the empty-list compatibility rule may hide an explicitly requested empty manifest.
