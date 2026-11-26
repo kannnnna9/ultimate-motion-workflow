@@ -82,7 +82,19 @@ Referensikan versi persis pada `ump_job` → `write_composition`, di dalam `valu
 
 Worker menyalin bytes terverifikasi itu ke revision dan `source.zip` sebagai path relatif `assets/<asset_id>-v<version>.<ext>`. `project.json`/manifest menyimpan metadata dan hash. Dengan demikian revisi lama tetap reproducible walau katalog bertambah versi. Registrasi identik bersifat idempotent; perubahan konten pada aset unlocked membuat versi immutable berikutnya dan tidak mengubah versi lama. `locked: true` menolak bytes berbeda dengan `ASSET_LOCKED`; gunakan ID baru untuk artwork baru. Koreksi metadata dengan bytes yang sama boleh membuat versi baru, tetapi tetap locked. Tool tidak menyediakan aksi unlock atau hapus.
 
-Untuk job tanpa aset, hilangkan `value.assets`; jangan mengirim path eksternal. Untuk render custom, pastikan HTML memuat path bundle lokal relatif, bukan URL jaringan. Assets tidak mengaktifkan audio, ASR, atau subtitle: M3 (audio/WhisperX/speech timing/subtitle) masih pending. ADR-010 (kontinuitas karakter/seri lintas episode) tetap deferred dan bukan blocker M2.
+Untuk job tanpa aset, hilangkan `value.assets`; jangan mengirim path eksternal. Untuk render custom, pastikan HTML memuat path bundle lokal relatif, bukan URL jaringan. Aset dan audio tetap optional; audio/timing/subtitle mengikuti M3 di bawah. ADR-010 (kontinuitas karakter/seri lintas episode) tetap deferred.
+
+## Audio, speech timing, dan subtitle (M3)
+
+Audio, alignment, aksi visual berbasis ucapan, dan subtitle adalah fitur terpisah. Naskah dan VO hanya dipakai bila brief memerlukannya.
+
+- Impor satu attachment audio Telegram pada job custom dengan caption persis `UMP AUDIO <job_id> <rev> <track_id> <kind>`, lalu panggil `ump_job` action `import_audio` dengan field `job_id`, `rev`, `track_id`, `kind`. Contoh: `UMP AUDIO AbCdEfGhIjKlMnOp 2 voice voice`. `track_id` stabil buatan operator (`[a-z][a-z0-9_-]{0,47}`); jenisnya `voice`, `music`, `sfx`, atau `ambience`. Untuk jalur episode lama, shorthand `UMP VO <job_id> <rev>` tetap didukung.
+- Setelah audio terimpor, `ump_job` action `write_composition` menerima HTML plus metadata `audio_enabled`, `audio_tracks`, `subtitles_enabled`, `subtitle_mode`, `speech_anchors`, dan `draws_speech_text`. Referensikan `track_id`/blob dari audio library; jangan kirim filesystem path.
+- VO + ASS memerlukan naskah yang disetujui, satu voice track terikat SHA-256, `subtitle_mode: "ass"`, dan transcript timing yang cocok dengan audio. Worker menyelaraskan secara offline memakai versi/model yang dipatok, menyertakan sidecar `.ass` yang tetap bisa diedit, lalu membakar satu pemilik subtitle ke MP4. Anchor visual memakai `word_id`; worker kuantisasi onset ke frame 30 FPS terdekat.
+- ASR hanya dipanggil saat ASS atau `speech_anchors` meminta timing. Job sunyi (`audio_enabled: false`, tanpa track, subtitle mode `none`), music/SFX-only tanpa anchor/subtitle, dan voice tanpa timing caption melewati ASR. `none` tidak menghasilkan sidecar subtitle.
+- Fallback `faster-whisper-tiny` adalah hasil terpisah, bukan pengganti otomatis. Bila token tidak sama persis dengan naskah disetujui, timeline menjadi `unresolved` dan render yang meminta timing gagal tertutup; teks naskah tidak ditulis ulang diam-diam.
+- Jangan kirim teks ke Edge TTS atau layanan TTS lain tanpa opt-in operator yang eksplisit: teks keluar dari VM. Import audio yang sudah ada dan WhisperX/faster-whisper lokal tidak mengirim naskah atau audio ke layanan cloud.
+- Dev branch `feat/ump-v2.0` tidak otomatis mengubah plugin produksi. Fitur M3 ini baru tersedia setelah branch disetujui dan dipasang; jangan menganggap tool produksi saat ini sudah memiliki aksi `import_audio`.
 
 ## Prosedur kreatif
 
