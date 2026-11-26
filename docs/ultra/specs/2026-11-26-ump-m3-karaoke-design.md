@@ -13,7 +13,7 @@ The desired result is word-by-word karaoke highlighting that follows the real, v
 ## Goals
 
 - Add a first-class web subtitle renderer with a `karaoke` effect to the custom-composition path, driven by the existing word timeline and the same absolute master clock as frame capture.
-- Keep the phrase visible as a readable group and change the active word highlight at its aligned word boundary. Default visual: current word in the existing anchor orange (`#FE7945`), remaining words white with the current outline. This is word-level highlighting, not character-level fill.
+- Keep the phrase visible as a readable group and change the active word highlight at its aligned word boundary. Default visual: every active word in the existing anchor orange (`#FE7945`), remaining words white with the current outline. If active words overlap, highlight all of them simultaneously; this is word-level highlighting, not character-level fill.
 - Rebalance groups at a word-count split so a single trailing word is not stranded. For the six-word reviewed phrase, use `dengan pemberhentian di Halte` then `Kejaksaan Agung.` (4+2), subject to actual phone-scale rendering.
 - Retain exactly one subtitle owner; preserve current `none` and `ass` behavior.
 - Keep an independently editable, revision-bound karaoke subtitle sidecar and include it with its hash in the source bundle/manifest.
@@ -44,7 +44,7 @@ The desired result is word-by-word karaoke highlighting that follows the real, v
 
 - Represent the output owner as `subtitle_mode: "none" | "ass" | "web"`. In web mode, require `subtitle_effect: "karaoke"`; no other web effect is implemented or implied. Keep `subtitles_enabled` as a compatibility field and require it to agree with `subtitle_mode != "none"`.
 - Web karaoke requires one pinned voice track, approved script, and a valid timeline bound to that voice SHA. Reject `draws_speech_text: true` to prevent a second speech owner, just as the current ASS path does.
-- The recorder mounts one renderer-owned overlay in an isolated DOM/shadow root after scene readiness and timeline handoff. It lays out the current deterministic phrase group, highlights the active aligned word in orange, and captures it in the same browser frame as the scene. For a frame time inside a word interval, use that word. If a gap is shorter than one 30-FPS frame, retain the previous active word until the next word's first rendered frame; longer gaps have no active-word highlight. Do not run free-playing timers.
+- The recorder mounts one renderer-owned overlay in an isolated DOM/shadow root after scene readiness and timeline handoff. It lays out the current deterministic phrase group, highlights active aligned words in orange, and captures them in the same browser frame as the scene. At frame sample time `n/fps`, activate every word whose half-open interval contains the sample (`start_ms <= sample_ms < end_ms`); do not pick a winner when intervals overlap. If active words belong to different phrase groups, show those groups as stacked rows at the existing bottom-center anchor. If there are no active words and a gap is shorter than one 30-FPS frame, retain the previous active word until the next word's first rendered frame; longer gaps have no active-word highlight. Do not run free-playing timers.
 - Generate balanced groups using word timing, punctuation, pause boundaries, and the existing five-word readability cap. Avoid a one-word tail by rebalancing at the split; validate the example at phone scale. Long text wraps within the current tested margins.
 - Keep karaoke layout/style and grouped word IDs/ranges in a deterministic editable `subtitles.json` sidecar. The worker burns the web layer into the video during browser capture, not as a second FFmpeg subtitle pass; the source bundle retains the sidecar and speech timeline. The final MP4 still receives the existing audio mux.
 - Preserve `none` (no ASR/subtitle artifact) and `ass` (editable ASS sidecar, one FFmpeg burn-in) paths unchanged.
@@ -67,7 +67,12 @@ The desired result is word-by-word karaoke highlighting that follows the real, v
 - A real worker render of the committed Indonesian VO passes FFprobe and full decode; review screenshots verify before/on/after multiple word changes at 360×640; playback is checked at 1×.
 - Run the configured full test suite and project checks. Update M3 evidence with the operator's stated review (VO correct, visual quality ~90%) and the remaining issue(s), then verify the rerender.
 - Faster-whisper previously produced `unresolved/transcript_mismatch` on this VO. Preserve that evidence and do not claim successful fallback alignment. Before closing M3, reconcile the blueprint's fallback exit criterion with the already-approved M3 design's explicit allowance to record the real fallback as blocked; if the accepted reading requires a usable successful fallback, M3 remains open until one is demonstrated on real audio.
+- Overlap acceptance: integration coverage must show all words active at one frame highlighted simultaneously, including when sentence/cue boundaries place them in separate groups; those groups stack rather than suppressing one word.
 
 ## Approval gate
 
 Approved by the operator in chat on 2026-11-26. Implementation proceeds under this scope and the approved M3 design. This approval does not authorize production modification, merge, push, publish, or deployment.
+
+## Operator clarification — overlapping word intervals (2026-11-27)
+
+The operator specified that when multiple word intervals overlap at a rendered frame, highlight all of those words simultaneously. If the words belong to separate phrase groups, keep both visible as stacked rows. The real revision-6 sample has no overlapping words, so its output is unchanged.

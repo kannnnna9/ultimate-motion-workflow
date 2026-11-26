@@ -260,54 +260,28 @@ async function openScene(htmlPath, meta, state, workspace, timelineData, karaoke
         const css = document.createElement('style');
         css.textContent = `
           :host{all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;display:block}
-          .phrase{position:absolute;left:${karaokeStyle.margin_l}px;right:${karaokeStyle.margin_r}px;
+          .phrase-stack{position:absolute;left:${karaokeStyle.margin_l}px;right:${karaokeStyle.margin_r}px;
             bottom:${karaokeStyle.margin_v}px;margin:0 auto;max-width:calc(100vw - ${karaokeStyle.margin_l + karaokeStyle.margin_r}px);
-            color:${karaokeStyle.inactive_color};font-family:"${karaokeStyle.font_name}",sans-serif;
+            display:flex;flex-direction:column;align-items:stretch;justify-content:center}
+          .phrase{width:100%;color:${karaokeStyle.inactive_color};font-family:"${karaokeStyle.font_name}",sans-serif;
             font-size:${karaokeStyle.font_size}px;font-weight:${karaokeStyle.bold ? 700 : 400};
             line-height:1.08;text-align:center;white-space:normal;overflow-wrap:anywhere;
             -webkit-text-stroke:${karaokeStyle.outline}px ${karaokeStyle.outline_color};paint-order:stroke fill}
           .word{display:inline}.active{color:${karaokeStyle.active_color}}
         `;
-        const phrase = document.createElement('div');
-        phrase.className = 'phrase';
-        shadow.append(css, phrase);
+        const phraseStack = document.createElement('div');
+        phraseStack.className = 'phrase-stack';
+        shadow.append(css, phraseStack);
         document.documentElement.append(host);
         const words = groups.flatMap((group, groupIndex) =>
           group.words.map(word => ({ ...word, groupIndex })));
-        let currentGroupId = null;
-        let spans = [];
-        const updateKaraoke = seconds => {
-          if (!Number.isFinite(seconds) || seconds < 0) throw new Error('karaoke seek time is invalid');
-          const frame = Math.round(seconds * payload.fps);
-          const sampleMs = frame * 1000 / payload.fps;
-          let activeWord = words.find(word => sampleMs >= word.start_ms && sampleMs < word.end_ms) || null;
-          let visibleGroup = activeWord ? activeWord.groupIndex : -1;
-          if (!activeWord) {
-            for (let index = 0; index + 1 < words.length; index++) {
-              const previous = words[index];
-              const next = words[index + 1];
-              const nextFrame = Math.ceil(next.start_ms * payload.fps / 1000);
-              if (sampleMs >= previous.end_ms && sampleMs < next.start_ms &&
-                  next.start_ms - previous.end_ms < 1000 / payload.fps && frame < nextFrame) {
-                activeWord = previous;
-                visibleGroup = previous.groupIndex;
-                break;
-              }
-            }
-          }
-          if (visibleGroup < 0) {
-            visibleGroup = groups.findIndex(group => sampleMs >= group.start_ms && sampleMs < group.end_ms);
-          }
-          if (visibleGroup < 0) {
-            phrase.replaceChildren();
-            currentGroupId = null;
-            spans = [];
-            return;
-          }
-          const group = groups[visibleGroup];
-          if (currentGroupId !== group.id) {
-            phrase.replaceChildren();
-            spans = group.words.map((word, index) => {
+        const phraseViews = new Map();
+        let currentGroupIndices = [];
+        const phraseViewFor = groupIndex => {
+          if (!phraseViews.has(groupIndex)) {
+            const phrase = document.createElement('div');
+            phrase.className = 'phrase';
+            const spans = groups[groupIndex].words.map((word, index) => {
               if (index) phrase.append(document.createTextNode(' '));
               const span = document.createElement('span');
               span.className = 'word';
@@ -315,10 +289,45 @@ async function openScene(htmlPath, meta, state, workspace, timelineData, karaoke
               phrase.append(span);
               return span;
             });
-            currentGroupId = group.id;
+            phraseViews.set(groupIndex, { element: phrase, spans });
           }
-          for (let index = 0; index < spans.length; index++) {
-            spans[index].classList.toggle('active', group.words[index].id === activeWord?.id);
+          return phraseViews.get(groupIndex);
+        };
+        const updateKaraoke = seconds => {
+          if (!Number.isFinite(seconds) || seconds < 0) throw new Error('karaoke seek time is invalid');
+          const frame = Math.round(seconds * payload.fps);
+          const sampleMs = frame * 1000 / payload.fps;
+          let activeWords = words.filter(word => sampleMs >= word.start_ms && sampleMs < word.end_ms);
+          if (!activeWords.length) {
+            for (let index = 0; index + 1 < words.length; index++) {
+              const previous = words[index];
+              const next = words[index + 1];
+              const nextFrame = Math.ceil(next.start_ms * payload.fps / 1000);
+              if (sampleMs >= previous.end_ms && sampleMs < next.start_ms &&
+                  next.start_ms - previous.end_ms < 1000 / payload.fps && frame < nextFrame) {
+                activeWords = [previous];
+                break;
+              }
+            }
+          }
+          let visibleGroups = [...new Set(activeWords.map(word => word.groupIndex))];
+          if (!visibleGroups.length) {
+            visibleGroups = groups.flatMap((group, index) =>
+              sampleMs >= group.start_ms && sampleMs < group.end_ms ? [index] : []);
+          }
+          const sameGroups = currentGroupIndices.length === visibleGroups.length &&
+            currentGroupIndices.every((groupIndex, index) => groupIndex === visibleGroups[index]);
+          if (!sameGroups) {
+            phraseStack.replaceChildren(...visibleGroups.map(groupIndex => phraseViewFor(groupIndex).element));
+            currentGroupIndices = visibleGroups;
+          }
+          const activeWordIds = new Set(activeWords.map(word => word.id));
+          for (const groupIndex of visibleGroups) {
+            const group = groups[groupIndex];
+            const { spans } = phraseViewFor(groupIndex);
+            for (let index = 0; index < spans.length; index++) {
+              spans[index].classList.toggle('active', activeWordIds.has(group.words[index].id));
+            }
           }
         };
         const originalSeek = api.seek.bind(api);

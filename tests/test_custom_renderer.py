@@ -390,6 +390,49 @@ class CustomRendererTests(unittest.TestCase):
         self.assertEqual(rgb[4], rgb[13], "seeking back to word two must restore identical pixels")
         self.assertEqual(rgb[1], rgb[14], "seeking back to word one must restore identical pixels")
 
+    def test_web_karaoke_highlights_all_overlapping_words_across_phrase_groups(self):
+        audio_sha256 = "e" * 64
+        words = [
+            {"id": "w00001", "text": "Cakra", "start_ms": 100, "end_ms": 300, "speaker_id": "s1", "timing_status": "aligned"},
+            {"id": "w00002", "text": "Selaras", "start_ms": 200, "end_ms": 400, "speaker_id": "s2", "timing_status": "aligned"},
+            {"id": "w00003", "text": "Alpha.", "start_ms": 500, "end_ms": 700, "speaker_id": "s1", "timing_status": "aligned"},
+            {"id": "w00004", "text": "Beta", "start_ms": 600, "end_ms": 800, "speaker_id": "s2", "timing_status": "aligned"},
+            {"id": "w00005", "text": "Gamma", "start_ms": 850, "end_ms": 950, "speaker_id": "s2", "timing_status": "aligned"},
+        ]
+        timeline = _karaoke_timeline(audio_sha256, 1000, words)
+        subtitle_bytes = render_karaoke_subtitles(
+            timeline, audio_sha256=audio_sha256, track_duration_ms=1000,
+        )
+        frames = [0, 8, 9, 19, 21, 19]
+        status, stdout, stderr, output = self._probe_karaoke(timeline, subtitle_bytes, frames)
+        self.assertEqual(status, 0, stderr)
+        self.assertEqual(json.loads(stdout)["frames"], len(frames))
+        rgb = [_png_rgb_bytes(png) for png in sorted(output.glob("seek-*.png"))]
+        bounds = [_orange_bounds(frame) for frame in rgb]
+
+        same_group_overlap = bounds[1]
+        single_word = bounds[2]
+        self.assertIsNotNone(same_group_overlap)
+        self.assertIsNotNone(single_word)
+        assert same_group_overlap is not None and single_word is not None
+        self.assertGreater(
+            same_group_overlap[1] - same_group_overlap[0],
+            single_word[1] - single_word[0] + 20,
+            "both overlapping words in one phrase group must be orange",
+        )
+
+        stacked_overlap = bounds[3]
+        one_group = bounds[4]
+        self.assertIsNotNone(stacked_overlap)
+        self.assertIsNotNone(one_group)
+        assert stacked_overlap is not None and one_group is not None
+        self.assertGreater(
+            stacked_overlap[3] - stacked_overlap[2],
+            one_group[3] - one_group[2] + 20,
+            "overlapping active words in separate phrase groups must both be visible",
+        )
+        self.assertEqual(rgb[3], rgb[5], "re-seeking an overlapping pair must restore identical pixels")
+
     def test_web_karaoke_does_not_open_external_network_routes(self):
         audio_sha256 = "d" * 64
         words = [{"id": "w00001", "text": "Cakra", "start_ms": 100, "end_ms": 500,
