@@ -1,6 +1,6 @@
 # UMP M3 — Audio, Speech Timing, and Subtitles
 
-**Status:** Proposed design — pending operator approval.
+**Status:** Approved by operator on 2026-11-26; implementation plan is in review.
 **Date:** 2026-11-26
 **Repository / branch:** `~/ultimate-motion-workflow-v2`, `feat/ump-v2.0`
 **Authority:** Approved UMP v2.0 master blueprint, ADR-005/006/008; M3 acceptance in the program plan.
