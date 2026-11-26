@@ -1,3 +1,4 @@
+import base64
 import json
 import tempfile
 import unittest
@@ -17,6 +18,9 @@ COMPOSITION = {
     "audio_enabled": False,
     "subtitles_enabled": False,
 }
+ASSET_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAFElEQVR4nGMUDJ7KwMDAxMDAgKAAEksA/8TvPSQAAAAASUVORK5CYII="
+)
 
 
 class CompositionToolTests(unittest.TestCase):
@@ -82,6 +86,63 @@ class CompositionToolTests(unittest.TestCase):
                 }))
         self.assertTrue(response["ok"], response)
         submit.assert_called_once_with(self.store, custom["job_id"], custom["rev"], "preview")
+
+
+class AssetToolContractTests(unittest.TestCase):
+    def test_asset_tool_schema_and_svg_registration(self):
+        schema = tools.SCHEMAS["ump_assets"]["parameters"]
+        self.assertEqual(schema["required"], ["action"])
+        self.assertEqual(schema["properties"]["action"]["enum"], ["list", "create_svg", "import_image"])
+        self.assertIn("Telegram image-cache", schema["properties"]["attachment"]["description"])
+        self.assertFalse(schema["additionalProperties"])
+        for key in ("asset_id", "svg", "source", "provenance", "license"):
+            self.assertIn(key, schema["properties"])
+        manifest = Path(__file__).resolve().parents[1] / "plugin.yaml"
+        self.assertIn("ump_assets", manifest.read_text(encoding="utf-8"))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+            with patch.object(tools, "_store", return_value=store):
+                created = json.loads(tools.dispatch("ump_assets", {
+                    "action": "create_svg",
+                    "asset_id": "leaf",
+                    "svg": '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6" viewBox="0 0 8 6"><circle cx="4" cy="3" r="2"/></svg>',
+                    "source": "hermes-procedural",
+                    "provenance": "original geometry for a local motion test",
+                    "license": "MIT",
+                    "seed": 17,
+                    "parameters": {"shape": "circle"},
+                    "locked": False,
+                }))
+                listed = json.loads(tools.dispatch("ump_assets", {"action": "list"}))
+        self.assertTrue(created["ok"], created)
+        self.assertEqual(created["data"]["id"], "leaf")
+        self.assertEqual(created["data"]["seed"], 17)
+        self.assertNotIn("content", created["data"])
+        self.assertNotIn("svg", created["data"])
+        self.assertEqual(listed["data"], [created["data"]])
+
+    def test_import_image_registers_bytes_from_current_cache_reader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = JobStore(root)
+            with patch.object(tools, "_store", return_value=store), patch.object(
+                    tools, "_read_image_attachment", return_value=(ASSET_PNG, ".png")) as reader:
+                imported = json.loads(tools.dispatch("ump_assets", {
+                    "action": "import_image",
+                    "asset_id": "leaf-photo",
+                    "attachment": "/profile/cache/images/img_012345abcdef.png",
+                    "source": "operator-upload",
+                    "provenance": "operator supplied image",
+                    "license": "operator-declared",
+                    "locked": True,
+                }))
+            stored_bytes = (root / imported["data"]["path"]).read_bytes()
+        self.assertTrue(imported["ok"], imported)
+        self.assertEqual(imported["data"]["format"], "png")
+        self.assertTrue(imported["data"]["locked"])
+        self.assertEqual(stored_bytes, ASSET_PNG)
+        reader.assert_called_once_with("/profile/cache/images/img_012345abcdef.png")
 
 
 class MotionPipelineSkillContractTests(unittest.TestCase):

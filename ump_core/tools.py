@@ -11,6 +11,7 @@ import threading
 import time
 from pathlib import Path
 
+from .assets import AssetStore
 from .composition import COMPOSITION_SCHEMA
 from .jobs import STAGE_KIND, DomainError, JobStore
 from .worker import FIXTURES, ID, MEDIA, ROOT, _valid_words, episode_docs, owned, reconcile, submit, execute_run
@@ -326,22 +327,17 @@ def _attachment(store, job_id, requested):
     return name
 
 
-def _image_attachment(store, job_id, requested):
-    """Copy the current Telegram image into the job's storyboard slot.
-
-    Same containment rules as audio: only a regular, owned file from the
-    runtime image cache, opened with O_NOFOLLOW so an alias cannot be swapped in
-    between the check and the read.
-    """
+def _read_image_attachment(requested):
+    """Read only the current owned Telegram image, without following aliases."""
     from gateway.platforms.base import get_image_cache_dir
     home = _home()
     cache = Path(get_image_cache_dir())
     if cache not in (home / 'cache/images', home / 'image_cache') or cache.resolve() != cache:
         raise DomainError('INVALID_ATTACHMENT', 'runtime image cache outside profile')
-    p = Path(requested or '')
-    if p.parent != cache or not re.fullmatch(r'img_[0-9a-f]{12}\.(jpg|jpeg|png|webp)', p.name):
+    path = Path(requested or '')
+    if path.parent != cache or not re.fullmatch(r'img_[0-9a-f]{12}[.](jpg|jpeg|png|webp)', path.name):
         raise DomainError('INVALID_ATTACHMENT', 'expected the current Telegram image attachment')
-    source = owned(cache, p.name)
+    source = owned(cache, path.name)
     try:
         fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, 'rb') as stream:
@@ -354,7 +350,13 @@ def _image_attachment(store, job_id, requested):
         raise DomainError('INVALID_ATTACHMENT', 'cached image no longer available') from exc
     if not 0 < len(data) <= _MAX_IMAGE:
         raise DomainError('INVALID_ATTACHMENT', 'image exceeds size limit')
-    name = secrets.token_urlsafe(12) + source.suffix
+    return data, source.suffix.lower()
+
+
+def _image_attachment(store, job_id, requested):
+    """Copy the current Telegram image into the job's storyboard slot."""
+    data, suffix = _read_image_attachment(requested)
+    name = secrets.token_urlsafe(12) + suffix
     directory = owned(store.root, Path('jobs') / job_id / 'storyboard')
     directory.mkdir(mode=0o700, exist_ok=True)
     with (directory / name).open('xb') as destination:
@@ -377,6 +379,37 @@ def _revision(value):
     if type(value) is not int or not 0 < value <= 999999999:
         raise DomainError('INVALID_REVISION', 'expected a positive integer revision')
     return value
+
+
+def _assets(store, payload):
+    action = payload.get('action') if isinstance(payload, dict) else None
+    shapes = {
+        'list': (('action',), ()),
+        'create_svg': (('action', 'asset_id', 'svg', 'source', 'provenance', 'license'),
+                       ('seed', 'parameters', 'locked')),
+        'import_image': (('action', 'asset_id', 'attachment', 'source', 'provenance', 'license'),
+                         ('locked',)),
+    }
+    shape = shapes.get(action)
+    if shape is None:
+        raise DomainError('INVALID_ACTION', 'unsupported asset operation')
+    _check_keys(payload, *shape)
+    assets = AssetStore(store.root)
+    if action == 'list':
+        return assets.list()
+    if action == 'create_svg':
+        return assets.add_svg(
+            payload['asset_id'], payload['svg'], source=payload['source'],
+            provenance=payload['provenance'], license=payload['license'],
+            seed=payload.get('seed'), parameters=payload.get('parameters'),
+            locked=payload.get('locked', False),
+        )
+    data, suffix = _read_image_attachment(payload['attachment'])
+    return assets.add_image(
+        payload['asset_id'], data, f"attachment{suffix}", source=payload['source'],
+        provenance=payload['provenance'], license=payload['license'],
+        locked=payload.get('locked', False),
+    )
 
 
 def _catalog():
@@ -678,6 +711,8 @@ def dispatch(name, args, **_):
             if name == 'ump_job':
                 _check_keys(args, ('action', 'payload'))
                 data = _job(store, args['action'], args['payload'])
+            elif name == 'ump_assets':
+                data = _assets(store, args)
             elif name == 'ump_render':
                 _check_keys(args, ('job_id', 'rev', 'target'))
                 job, rev = _identifier(args['job_id']), _revision(args['rev'])
@@ -742,6 +777,31 @@ _job_payload_schema = {
 }
 SCHEMAS = {
     'ump_styles': _schema('List UMP style presets and their renderability.', {}),
+    'ump_assets': {
+        'description': 'List, create, or import provenance-aware UMP assets. Load ump:motion-pipeline.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'action': {'type': 'string', 'enum': ['list', 'create_svg', 'import_image'],
+                           'description': 'Operation; action-specific required fields are validated at runtime.'},
+                'asset_id': {'type': 'string', 'pattern': '^[a-z][a-z0-9_-]{0,47}$'},
+                'svg': {'type': 'string', 'maxLength': 10485760,
+                        'description': 'Self-contained static SVG source, at most 10 MiB when encoded.'},
+                'attachment': {'type': 'string',
+                               'description': 'Current Telegram image-cache path; only the owned attachment is accepted.'},
+                'source': {'type': 'string', 'minLength': 1, 'maxLength': 256,
+                           'description': 'Origin or provider, supplied explicitly.'},
+                'provenance': {'type': 'string', 'minLength': 1, 'maxLength': 1024},
+                'license': {'type': 'string', 'minLength': 1, 'maxLength': 256,
+                            'description': 'License or operator-declared rights basis.'},
+                'seed': {'type': 'integer'},
+                'parameters': {'type': 'object'},
+                'locked': {'type': 'boolean'},
+            },
+            'required': ['action'],
+            'additionalProperties': False,
+        },
+    },
     'ump_job': _schema('Create, read, revise, annotate or record explicit UMP approval. Load ump:motion-pipeline.', {
         'action': {'type': 'string', 'enum': ['create', 'get', 'set_brief', 'research', 'write_naskah', 'import_naskah', 'select_style', 'revise', 'annotate', 'approve', 'write_composition']},
         'payload': {**_job_payload_schema,
