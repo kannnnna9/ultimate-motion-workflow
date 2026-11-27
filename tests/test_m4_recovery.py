@@ -9,7 +9,7 @@ import zlib
 from pathlib import Path
 from unittest import mock
 
-from ump_core import audio, worker
+from ump_core import audio, render_cache, worker
 from ump_core.jobs import JobStore
 from ump_core.render_cache import stage_key, validate_unit
 from ump_core.subtitles import MOBILE_ASS_STYLE
@@ -259,6 +259,182 @@ class RenderCacheUnitTests(unittest.TestCase):
     def test_complete_ordered_capture_unit_validates(self):
         unit = _capture_unit(self.root / "unit", self.key)
         self.assertTrue(validate_unit(unit, self.key))
+
+    def test_corrupt_private_unit_reclaims_its_own_bytes_and_retry_hits(self):
+        cache_root = self.root / "replace-cache"
+        key = stage_key("sidecar", {"test": "bounded-repair"})
+        destination = render_cache.unit_path(cache_root, "sidecar", key)
+        old_data = b"o" * 8192
+        replacement = b"n" * 8192
+        render_cache.publish_file_unit(destination, "sidecar", key, {"sidecar.bin": old_data})
+        (destination / "sidecar.bin").write_bytes(b"x" * len(old_data))
+
+        with mock.patch.object(worker.resources, "CACHE_RESERVE_BYTES", 12 * 1024):
+            published, reason = worker._cache_publish_file(
+                cache_root, "sidecar", key, "sidecar.bin", replacement,
+            )
+            self.assertTrue(published, reason)
+            data, hit_reason = worker._cache_file(cache_root, "sidecar", key, "sidecar.bin")
+            self.assertEqual(data, replacement)
+            self.assertEqual(hit_reason, "verified stage unit")
+
+        capped_root = self.root / "capped-cache"
+        capped_key = stage_key("sidecar", {"test": "cap"})
+        with mock.patch.object(worker.resources, "CACHE_RESERVE_BYTES", 4096):
+            capped, cap_reason = worker._cache_publish_file(
+                capped_root, "sidecar", capped_key, "sidecar.bin", replacement,
+            )
+        self.assertFalse(capped)
+        self.assertIn("limit", cap_reason)
+        self.assertFalse(render_cache.unit_path(capped_root, "sidecar", capped_key).exists())
+
+        outside = self.root / "outside-cache-target"
+        outside.mkdir(mode=0o700)
+        marker = outside / "keep.bin"
+        marker.write_bytes(b"user data")
+        symlink_root = self.root / "symlink-cache"
+        stage_dir = symlink_root / "sidecar"
+        stage_dir.mkdir(mode=0o700, parents=True)
+        symlink_key = stage_key("sidecar", {"test": "symlink"})
+        link = render_cache.unit_path(symlink_root, "sidecar", symlink_key)
+        link.symlink_to(outside, target_is_directory=True)
+        with mock.patch.object(worker.resources, "CACHE_RESERVE_BYTES", 64 * 1024):
+            symlink_publish, _ = worker._cache_publish_file(
+                symlink_root, "sidecar", symlink_key, "sidecar.bin", b"safe replacement",
+            )
+        self.assertFalse(symlink_publish)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(marker.read_bytes(), b"user data")
+
+    def test_ass_mux_cache_fails_closed_across_controlled_fontconfig_change(self):
+        video = self.root / "video.mp4"
+        audio_path = self.root / "audio.wav"
+        video.write_bytes(b"video bytes")
+        audio_path.write_bytes(b"audio bytes")
+        metadata = {"fps": 30, "width": 32, "height": 32, "duration_frames": 30}
+        subtitle_bytes = b"[V4+ Styles]\nStyle: Default,DejaVu Sans,24\n"
+        ffmpeg_version = mock.Mock(returncode=0, stdout="ffmpeg version 6.1.1", stderr="")
+        cache_root = self.root / "mux-cache"
+
+        with mock.patch.object(worker.subprocess, "run", return_value=ffmpeg_version), \
+                mock.patch.object(worker, "_ass_font_cache_identity",
+                                  side_effect=lambda _subtitle: worker.os.environ["FONTCONFIG_FILE"]):
+            with mock.patch.dict(worker.os.environ, {"FONTCONFIG_FILE": str(self.root / "font-A.conf")}):
+                font_a_key = worker._custom_mux_key(video, [audio_path], [], subtitle_bytes, metadata)
+            assert font_a_key is not None
+            render_cache.publish_file_unit(
+                render_cache.unit_path(cache_root, "mux", font_a_key), "mux", font_a_key,
+                {"mux.mp4": b"font-A burn-in"},
+            )
+            with mock.patch.dict(worker.os.environ, {"FONTCONFIG_FILE": str(self.root / "font-B.conf")}):
+                font_b_key = worker._custom_mux_key(video, [audio_path], [], subtitle_bytes, metadata)
+            self.assertNotEqual(font_a_key, font_b_key)
+            cached, changed_reason = worker._mux_cache_lookup(
+                cache_root, font_b_key, "mux.mp4", ass_burnin=True,
+            )
+        self.assertIsNone(cached)
+        self.assertEqual(changed_reason, "unit missing, old, or invalid")
+
+        production_key = worker._custom_mux_key(video, [audio_path], [], subtitle_bytes, metadata)
+        self.assertIsNone(production_key)
+        cached, reason = worker._mux_cache_lookup(
+            cache_root, production_key, "mux.mp4", ass_burnin=True,
+        )
+        self.assertIsNone(cached)
+        self.assertIn("fontconfig/libass identity", reason)
+
+        non_ass_key = worker._custom_mux_key(video, [audio_path], [], None, metadata)
+        self.assertIsNotNone(non_ass_key)
+        published, _ = worker._cache_publish_file(cache_root, "mux", non_ass_key, "mux.mp4", b"non-ASS mux")
+        self.assertTrue(published)
+        non_ass_hit, _ = worker._cache_file(cache_root, "mux", non_ass_key, "mux.mp4")
+        self.assertEqual(non_ass_hit, b"non-ASS mux")
+
+    def test_mux_path_cache_skips_unkeyed_and_oversize_without_reading(self):
+        source = self.root / "mux-output.mp4"
+        source.write_bytes(b"not-read-before-cacheability-check")
+        cache_root = self.root / "mux-path-cache"
+        key = stage_key("mux", {"output": "test"})
+        publish = mock.patch.object(render_cache, "publish_file_unit_from_path")
+        read_all = mock.patch.object(Path, "read_bytes", side_effect=AssertionError("unexpected full-file read"))
+        with publish as publisher, read_all:
+            missing_key, missing_reason = worker._cache_publish_path(
+                cache_root, "mux", None, "mux.mp4", source,
+            )
+            self.assertFalse(missing_key)
+            self.assertIn("identity", missing_reason)
+            self.assertFalse(publisher.called)
+
+        oversized = self.root / "oversized-sparse.mp4"
+        cap = 1024 * 1024
+        with oversized.open("wb") as stream:
+            stream.truncate(cap + 1)
+        with mock.patch.object(worker.resources, "CACHE_RESERVE_BYTES", cap), \
+                mock.patch.object(render_cache, "publish_file_unit_from_path") as publisher, \
+                mock.patch.object(Path, "read_bytes", side_effect=AssertionError("oversize file was read")):
+            skipped, oversize_reason = worker._cache_publish_path(
+                cache_root, "mux", key, "mux.mp4", oversized,
+            )
+        self.assertFalse(skipped)
+        self.assertIn("limit", oversize_reason)
+        self.assertFalse(publisher.called)
+
+    def test_large_generic_unit_validation_and_restore_stream_without_full_reads(self):
+        cache_root = self.root / "stream-cache"
+        key = stage_key("mux", {"fixture": "streamed"})
+        source = self.root / "large-sparse.mp4"
+        with source.open("wb") as stream:
+            stream.truncate(8 * 1024 * 1024)
+        destination = render_cache.unit_path(cache_root, "mux", key)
+
+        with mock.patch.object(render_cache, "_regular_bytes", wraps=render_cache._regular_bytes) as read_small:
+            render_cache.publish_file_unit_from_path(destination, "mux", key, "mux.mp4", source)
+            self.assertTrue(validate_unit(destination, key))
+            media_reads = [call for call in read_small.call_args_list if Path(call.args[0]).name == "mux.mp4"]
+            self.assertEqual(media_reads, [])
+
+        restored = self.root / "restored.mp4"
+        with mock.patch.object(Path, "read_bytes", side_effect=AssertionError("restore must stream")):
+            result = render_cache.restore_unit_file(destination, key, "mux.mp4", restored)
+        self.assertEqual(result, restored)
+        self.assertEqual(restored.stat().st_size, source.stat().st_size)
+        self.assertEqual(render_cache._stream_sha256(restored), render_cache._stream_sha256(source))
+
+        frames = self.root / "valid-mux-frames"
+        frames.mkdir(mode=0o700)
+        for index in range(30):
+            (frames / f"f{index:05d}.png").write_bytes(_png((index, 255 - index, (index * 7) % 256)))
+        valid_mux = self.root / "valid-mux.mp4"
+        _encode_png_sequence(frames, valid_mux)
+        mux_key = stage_key("mux", {"fixture": "small-valid-mux"})
+        with mock.patch.object(Path, "read_bytes", side_effect=AssertionError("mux cache must stream")):
+            published, publish_reason = worker._cache_publish_path(
+                cache_root, "mux", mux_key, "mux.mp4", valid_mux,
+            )
+            self.assertTrue(published, publish_reason)
+            mux_restored = self.root / "valid-mux-restored.mp4"
+            hit, hit_reason = worker._cache_restore_file(
+                cache_root, "mux", mux_key, "mux.mp4", mux_restored,
+            )
+        self.assertEqual(hit, mux_restored)
+        self.assertEqual(hit_reason, "verified stage unit")
+        self.assertTrue(worker._frames_intact(mux_restored, expected_frames=30, fps=30, width=32, height=32))
+
+    def test_deeply_nested_valid_size_manifest_is_a_cache_miss(self):
+        cache_root = self.root / "deep-cache"
+        key = stage_key("sidecar", {"fixture": "deep-json"})
+        unit = render_cache.unit_path(cache_root, "sidecar", key)
+        render_cache.publish_file_unit(unit, "sidecar", key, {"sidecar.bin": b"ok"})
+        (unit / "manifest.json").write_text("[" * 1200 + "0" + "]" * 1200, encoding="utf-8")
+        self.assertFalse(validate_unit(unit, key))
+        self.assertEqual(worker._cache_file(cache_root, "sidecar", key, "sidecar.bin"),
+                         (None, "unit missing, old, or invalid"))
+
+        good_key = stage_key("sidecar", {"fixture": "valid-neighbour"})
+        good_unit = render_cache.unit_path(cache_root, "sidecar", good_key)
+        render_cache.publish_file_unit(good_unit, "sidecar", good_key, {"sidecar.bin": b"ok"})
+        self.assertTrue(validate_unit(good_unit, good_key))
+        self.assertEqual(worker._cache_file(cache_root, "sidecar", good_key, "sidecar.bin")[0], b"ok")
 
     def test_worker_reuses_verified_full_range_with_decoded_equivalence(self):
         project = self.root / "project"

@@ -19,6 +19,7 @@ STAGES = frozenset({"alignment", "sidecar", "capture", "mux"})
 _HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _MAX_FILE_BYTES = 512 * 1024 * 1024
+_MAX_IN_MEMORY_FILE_BYTES = 16 * 1024 * 1024
 _MAX_CAPTURE_PNG_BYTES = 32 * 1024 * 1024
 _MAX_DECODED_PNG_BYTES = 64 * 1024 * 1024
 
@@ -81,6 +82,34 @@ def _regular_bytes(path: Path, *, limit: int) -> bytes:
                 != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
             raise CacheError("unit file changed while being read")
         return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _stream_sha256(path: Path, *, limit: int = _MAX_FILE_BYTES) -> tuple[int, str]:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                or before.st_nlink != 1 or before.st_size < 0 or before.st_size > limit
+                or before.st_mode & 0o002):
+            raise CacheError("unit file is not a bounded private regular file")
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = os.read(fd, min(1024 * 1024, limit - total + 1))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > limit:
+                raise CacheError("unit file exceeds its byte limit")
+            digest.update(chunk)
+        after = os.fstat(fd)
+        if (total != before.st_size or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
+            raise CacheError("unit file changed while being hashed")
+        return total, digest.hexdigest()
     finally:
         os.close(fd)
 
@@ -208,8 +237,8 @@ def _validate_file_entries(path: Path, entries: object, actual_names: set[str]) 
         if (not _safe_name(name) or name in seen or type(size) is not int or size < 1
                 or size > _MAX_FILE_BYTES or not isinstance(digest, str) or not _HEX_SHA256.fullmatch(digest)):
             raise CacheError("unit file metadata is invalid")
-        data = _regular_bytes(path / name, limit=_MAX_FILE_BYTES)
-        if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+        actual_size, actual_digest = _stream_sha256(path / name, limit=_MAX_FILE_BYTES)
+        if actual_size != size or actual_digest != digest:
             raise CacheError("unit file checksum mismatch")
         seen.add(name)
         expected_names.add(name)
@@ -260,7 +289,7 @@ def validate_unit(path: Path, expected_key: str) -> bool:
             return False
         _validate_file_entries(candidate, document["files"], actual_names)
         return True
-    except (OSError, UnicodeError, ValueError, TypeError, KeyError, CacheError, json.JSONDecodeError):
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError, CacheError, json.JSONDecodeError, RecursionError):
         return False
 
 
@@ -272,7 +301,44 @@ def read_unit_file(path: Path, expected_key: str, name: str) -> bytes:
         raise CacheError("capture units expose indexed frames, not generic files")
     if name not in {entry["name"] for entry in manifest["files"]}:
         raise CacheError("requested unit file is not in the manifest")
-    return _regular_bytes(Path(path) / name, limit=_MAX_FILE_BYTES)
+    return _regular_bytes(Path(path) / name, limit=_MAX_IN_MEMORY_FILE_BYTES)
+
+
+def restore_unit_file(path: Path, expected_key: str, name: str, destination: Path) -> Path:
+    """Restore a validated generic unit file to a private destination without buffering it."""
+    candidate = Path(path).absolute()
+    if not validate_unit(candidate, expected_key) or not _safe_name(name):
+        raise CacheError("unit is not valid for this stage key")
+    try:
+        manifest, _ = _read_manifest(candidate)
+    except (OSError, UnicodeError, ValueError, TypeError, CacheError, RecursionError) as exc:
+        raise CacheError("unit manifest changed during restore") from exc
+    if manifest.get("stage") == "capture":
+        raise CacheError("capture units expose indexed frames, not generic files")
+    entries = manifest.get("files")
+    entry = next((item for item in entries if isinstance(item, dict) and item.get("name") == name), None) \
+        if isinstance(entries, list) else None
+    if entry is None:
+        raise CacheError("requested unit file is not in the manifest")
+    destination = Path(destination).absolute()
+    if destination.exists() or destination.is_symlink():
+        raise CacheError("restore destination already exists")
+    temporary = destination.parent / f".{destination.name}.tmp-{uuid.uuid4().hex}"
+    try:
+        _copy_regular_file(
+            candidate / name, temporary, limit=_MAX_FILE_BYTES,
+            expected_size=entry["size_bytes"], expected_digest=entry["sha256"],
+        )
+        os.replace(temporary, destination)
+        parent_fd = os.open(destination.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+        return destination
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _ensure_parent(path: Path) -> None:
@@ -298,6 +364,73 @@ def _write_private(path: Path, data: bytes) -> None:
         stream.write(data)
         stream.flush()
         os.fsync(stream.fileno())
+
+
+def _copy_regular_file(source: Path, destination: Path, *, limit: int,
+                       expected_size: int | None = None, expected_digest: str | None = None) -> tuple[int, str]:
+    source, destination = Path(source), Path(destination)
+    _assert_real_directory(source.parent)
+    _assert_real_directory(destination.parent)
+    source_fd = os.open(source, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0))
+    destination_fd = None
+    destination_created = False
+    try:
+        before = os.fstat(source_fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or before.st_nlink != 1
+                or before.st_size < 1 or before.st_size > limit or before.st_mode & 0o002):
+            raise CacheError("stream source is not a bounded private regular file")
+        destination_fd = os.open(
+            destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600,
+        )
+        destination_created = True
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = os.read(source_fd, min(1024 * 1024, limit - total + 1))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > limit:
+                raise CacheError("stream source exceeds its byte limit")
+            digest.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(destination_fd, view)
+                if written <= 0:
+                    raise OSError("short write while copying cache file")
+                view = view[written:]
+        after = os.fstat(source_fd)
+        if (total != before.st_size or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
+            raise CacheError("stream source changed while being copied")
+        actual_digest = digest.hexdigest()
+        if ((expected_size is not None and total != expected_size)
+                or (expected_digest is not None and actual_digest != expected_digest)):
+            raise CacheError("stream source checksum mismatch")
+        os.fsync(destination_fd)
+        return total, actual_digest
+    except Exception:
+        if destination_fd is not None:
+            os.close(destination_fd)
+            destination_fd = None
+        if destination_created:
+            destination.unlink(missing_ok=True)
+        raise
+    finally:
+        if destination_fd is not None:
+            os.close(destination_fd)
+        os.close(source_fd)
+
+
+def file_unit_manifest_size(stage: str, key: str, name: str, size_bytes: int) -> int:
+    if (stage not in STAGES or stage == "capture" or not _HEX_SHA256.fullmatch(key)
+            or not _safe_name(name) or type(size_bytes) is not int or size_bytes < 1):
+        raise CacheError("file-unit identity or size is invalid")
+    manifest = {"schema_version": SCHEMA_VERSION, "stage": stage, "key": key, "files": [{
+        "name": name, "size_bytes": size_bytes, "sha256": "0" * 64,
+    }]}
+    return len(json.dumps(manifest, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":"), allow_nan=False).encode("utf-8"))
 
 
 def _publish(destination: Path, stage: str, key: str, write_outputs) -> Path:
@@ -342,11 +475,23 @@ def publish_file_unit(destination: Path, stage: str, key: str, files: Mapping[st
         entries = []
         for name in sorted(files):
             data = files[name]
-            if not _safe_name(name) or not isinstance(data, bytes) or not data:
+            if not _safe_name(name) or not isinstance(data, bytes) or not data or len(data) > _MAX_FILE_BYTES:
                 raise CacheError("generic unit output is invalid")
             _write_private(temporary / name, data)
             entries.append({"name": name, "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
         return {"files": entries}
+
+    return _publish(Path(destination), stage, key, write_outputs)
+
+
+def publish_file_unit_from_path(destination: Path, stage: str, key: str, name: str, source: Path) -> Path:
+    """Publish one generic file unit by copying, hashing, and validating in bounded chunks."""
+    if stage == "capture" or not _safe_name(name):
+        raise CacheError("generic unit path output is invalid")
+
+    def write_outputs(temporary: Path) -> dict:
+        size, digest = _copy_regular_file(source, temporary / name, limit=_MAX_FILE_BYTES)
+        return {"files": [{"name": name, "size_bytes": size, "sha256": digest}]}
 
     return _publish(Path(destination), stage, key, write_outputs)
 
@@ -400,3 +545,60 @@ def cache_bytes(root: Path) -> int:
                 raise CacheError("cache contains a non-regular file")
             total += info.st_size
     return total
+
+
+def reclaim_unit_if_fits(cache_root: Path, stage: str, key: str, *, new_unit_bytes: int,
+                         reserve_bytes: int, max_unit_bytes: int = _MAX_FILE_BYTES + _MAX_MANIFEST_BYTES) -> int | None:
+    """Remove only an exact private cache-key directory when replacement fits the job reserve."""
+    root = Path(cache_root).absolute()
+    target = unit_path(root, stage, key)
+    if root.is_symlink():
+        raise CacheError("cache root is a symlink")
+    if not root.exists():
+        return None
+    _assert_real_directory(root)
+    stage_dir = root / stage
+    if stage_dir.is_symlink():
+        raise CacheError("cache stage directory is a symlink")
+    if not stage_dir.exists():
+        return None
+    _assert_real_directory(stage_dir)
+    if target.is_symlink():
+        raise CacheError("cache unit is a symlink")
+    if not target.exists():
+        return None
+    _assert_real_directory(target)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    root_fd = os.open(root, directory_flags)
+    stage_fd = None
+    unit_fd = None
+    try:
+        stage_fd = os.open(stage, directory_flags, dir_fd=root_fd)
+        unit_fd = os.open(key, directory_flags, dir_fd=stage_fd)
+        unit_stat = os.fstat(unit_fd)
+        if unit_stat.st_uid != os.getuid() or unit_stat.st_mode & 0o077:
+            raise CacheError("cache unit is not privately owned")
+        names = os.listdir(unit_fd)
+        total = 0
+        for name in names:
+            info = os.stat(name, dir_fd=unit_fd, follow_symlinks=False)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_nlink != 1 or info.st_mode & 0o002):
+                raise CacheError("cache unit contains an unsafe entry")
+            total += info.st_size
+            if total > max_unit_bytes:
+                raise CacheError("cache unit exceeds the reclaim bound")
+        current = cache_bytes(root)
+        if current - total + new_unit_bytes > reserve_bytes:
+            return None
+        for name in names:
+            os.unlink(name, dir_fd=unit_fd)
+        os.rmdir(key, dir_fd=stage_fd)
+        os.fsync(stage_fd)
+        return total
+    finally:
+        if unit_fd is not None:
+            os.close(unit_fd)
+        if stage_fd is not None:
+            os.close(stage_fd)
+        os.close(root_fd)

@@ -741,9 +741,51 @@ def _cache_file(cache_root, stage, key, name):
     if render_cache.validate_unit(candidate, key):
         try:
             return render_cache.read_unit_file(candidate, key, name), 'verified stage unit'
-        except (OSError, ValueError, render_cache.CacheError):
+        except (OSError, ValueError, render_cache.CacheError, RecursionError):
             return None, 'unit failed content validation'
     return None, 'unit missing, old, or invalid'
+
+
+def _cache_restore_file(cache_root, stage, key, name, destination):
+    if cache_root is None or key is None:
+        return None, 'cache identity unavailable'
+    candidate = render_cache.unit_path(cache_root, stage, key)
+    if render_cache.validate_unit(candidate, key):
+        try:
+            return render_cache.restore_unit_file(candidate, key, name, destination), 'verified stage unit'
+        except (OSError, ValueError, render_cache.CacheError, RecursionError):
+            return None, 'unit failed content validation'
+    return None, 'unit missing, old, or invalid'
+
+
+def _mux_cache_lookup(cache_root, key, name, *, ass_burnin, destination=None):
+    if key is None:
+        if ass_burnin:
+            return None, 'ASS burn-in mux cache disabled: effective fontconfig/libass identity cannot be proved'
+        return None, 'mux encoder runtime identity unavailable'
+    if destination is not None:
+        return _cache_restore_file(cache_root, 'mux', key, name, destination)
+    return _cache_file(cache_root, 'mux', key, name)
+
+
+def _cache_reserve_fits(cache_root, stage, key, name, size):
+    reserve = resources.CACHE_RESERVE_BYTES
+    required = size + render_cache.file_unit_manifest_size(stage, key, name, size)
+    if required > reserve:
+        return False
+    current = render_cache.cache_bytes(cache_root)
+    destination = render_cache.unit_path(cache_root, stage, key)
+    if destination.is_symlink():
+        raise render_cache.CacheError("cache unit path is a symlink")
+    if destination.exists():
+        reclaimed = render_cache.reclaim_unit_if_fits(
+            cache_root, stage, key, new_unit_bytes=required, reserve_bytes=reserve,
+            max_unit_bytes=min(resources.MAX_OUTPUT_BYTES, reserve) + 4 * 1024 * 1024,
+        )
+        if reclaimed is None:
+            return False
+        current = render_cache.cache_bytes(cache_root)
+    return current + required <= reserve
 
 
 def _cache_publish_file(cache_root, stage, key, name, data):
@@ -752,11 +794,33 @@ def _cache_publish_file(cache_root, stage, key, name, data):
     if not isinstance(data, bytes) or not data:
         return False, 'stage produced no cacheable bytes'
     try:
-        if render_cache.cache_bytes(cache_root) + len(data) > resources.CACHE_RESERVE_BYTES:
+        if len(data) > min(resources.MAX_OUTPUT_BYTES, resources.CACHE_RESERVE_BYTES):
+            return False, 'stage output exceeds the per-job cache byte limit'
+        if not _cache_reserve_fits(cache_root, stage, key, name, len(data)):
             return False, 'per-job cache reserve would be exceeded'
         destination = render_cache.unit_path(cache_root, stage, key)
         render_cache.publish_file_unit(destination, stage, key, {name: data})
         return True, 'complete unit atomically published and verified'
+    except (OSError, ValueError, render_cache.CacheError) as exc:
+        return False, f'unit publication rejected: {type(exc).__name__}'
+
+
+def _cache_publish_path(cache_root, stage, key, name, source):
+    if cache_root is None or key is None:
+        return False, 'cache identity unavailable'
+    source = Path(source)
+    try:
+        info = source.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1
+                or info.st_mode & 0o002 or info.st_size < 1):
+            return False, 'mux output is not a private regular file'
+        if info.st_size > min(resources.MAX_OUTPUT_BYTES, resources.CACHE_RESERVE_BYTES):
+            return False, 'mux output exceeds the per-job cache byte limit'
+        if not _cache_reserve_fits(cache_root, stage, key, name, info.st_size):
+            return False, 'per-job cache reserve would be exceeded'
+        destination = render_cache.unit_path(cache_root, stage, key)
+        render_cache.publish_file_unit_from_path(destination, stage, key, name, source)
+        return True, 'complete streamed unit atomically published and verified'
     except (OSError, ValueError, render_cache.CacheError) as exc:
         return False, f'unit publication rejected: {type(exc).__name__}'
 
@@ -851,7 +915,17 @@ def _custom_capture_key(html_bytes, project_bytes, asset_blobs, timing_bytes, ka
     })
 
 
+def _ass_font_cache_identity(_subtitle_bytes):
+    """Return no key until all libass/fontconfig glyph-fallback inputs can be pinned."""
+    return None
+
+
 def _custom_mux_key(video_path, audio_paths, audio_manifest, subtitle_bytes, metadata, *, deadline=None):
+    ass_font_identity = None
+    if subtitle_bytes is not None:
+        ass_font_identity = _ass_font_cache_identity(subtitle_bytes)
+        if ass_font_identity is None:
+            return None
     try:
         version = subprocess.run(
             ['ffmpeg', '-version'], capture_output=True, text=True,
@@ -869,6 +943,7 @@ def _custom_mux_key(video_path, audio_paths, audio_manifest, subtitle_bytes, met
         'encoder_settings': {
             'implementation': 1,
             'ffmpeg_version': ffmpeg_version,
+            **({'ass_font_runtime_identity': ass_font_identity} if ass_font_identity is not None else {}),
             'video': {'codec': 'libx264', 'preset': 'fast', 'crf': 18, 'pix_fmt': 'yuv420p',
                       'fps': metadata['fps'], 'width': metadata['width'], 'height': metadata['height'],
                       'frames': metadata['duration_frames'], 'threads': 2},
@@ -1264,10 +1339,12 @@ def _render_custom(store, run, directory, deadline, budget_check=None):
                 work_video, audio_paths, audio_manifest,
                 subtitle_bytes if subtitle_path is not None else None, metadata, deadline=deadline,
             )
-            cached_mux, mux_reason = _cache_file(cache_root, 'mux', mux_key, 'mux.mp4')
+            cached_mux, mux_reason = _mux_cache_lookup(
+                cache_root, mux_key, 'mux.mp4', ass_burnin=subtitle_path is not None,
+                destination=muxed_video,
+            )
             mux_hit = False
             if cached_mux is not None:
-                _write_private_bytes(muxed_video, cached_mux)
                 try:
                     _validate_custom_video(muxed_video, validated, deadline, audio_enabled=True)
                     mux_hit = True
@@ -1305,12 +1382,14 @@ def _render_custom(store, run, directory, deadline, budget_check=None):
                     detail = _tail_text(mux_tail, workspace)
                     raise DomainError('RENDER_FAILED', f'FFmpeg mux exit {mux_status}: {detail}')
                 _validate_custom_video(muxed_video, validated, deadline, audio_enabled=True)
-                published, publish_reason = _cache_publish_file(
-                    cache_root, 'mux', mux_key, 'mux.mp4', muxed_video.read_bytes(),
-                )
+                if mux_key is None:
+                    published, publish_reason = False, mux_reason
+                else:
+                    published, publish_reason = _cache_publish_path(
+                        cache_root, 'mux', mux_key, 'mux.mp4', muxed_video,
+                    )
                 _write_render_cache_report(
-                    directory, cache_report, 'mux', 'miss',
-                    f'mux validated; {publish_reason}' if published else f'mux validated; {publish_reason}', mux_key,
+                    directory, cache_report, 'mux', 'miss', f'mux validated; {publish_reason}', mux_key,
                 )
             final_workspace_video = muxed_video
         else:
