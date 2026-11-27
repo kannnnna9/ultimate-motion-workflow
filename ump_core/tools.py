@@ -674,6 +674,28 @@ def _current_rev(store, job):
     return store.get(job)['rev']
 
 
+def _repair_budget(store, job, rev):
+    from . import resources, sandbox
+
+    payload = store.get_revision_payload(job, rev)
+    custom = isinstance(payload.get('composition'), dict)
+    metadata = payload.get('composition', {}).get('metadata', {}) if custom else {}
+    audio_enabled = isinstance(metadata, dict) and metadata.get('audio_enabled') is True
+    workload = 'custom_repair' if custom else 'legacy_repair'
+    projection = resources.estimate_render_projection(workload, audio_enabled=audio_enabled)
+    try:
+        sample = resources.probe_resources(
+            data_root=store.root, root=Path('/'), temp_root=sandbox.SHM_ROOT,
+        )
+    except (OSError, ValueError) as exc:
+        return {'decision': 'stop', 'reasons': ['resource_probe_failed'], 'detail': str(exc)[:300]}
+    phase = projection['phases']['initial']
+    sample['projected_temp_bytes'] = phase['temporary_bytes']
+    budget = resources.check_budget(sample, phase['data_root_bytes'], workload)
+    budget['phase'] = 'initial'
+    return budget
+
+
 def _check_fact_refs(store, job, naskah, cue):
     """Every beat must cite a source that the research step actually recorded."""
     if not isinstance(naskah, dict) or not isinstance(naskah.get('beats'), list):
@@ -735,6 +757,7 @@ def _job(store, action, payload):
         'lock': (('job_id', 'rev', 'scope'), ()),
         'unlock': (('job_id', 'rev', 'scope'), ()),
         'rollback': (('job_id', 'rev', 'source_rev'), ()),
+        'repair': (('job_id', 'rev', 'review'), ('initial_rev', 'issue_id', 'request_id', 'patch', 'value')),
     }.get(action)
     if shape is None:
         raise DomainError('INVALID_ACTION', 'unsupported job operation')
@@ -762,6 +785,22 @@ def _job(store, action, payload):
             data['run'] = {k: run[k] for k in ('run_id', 'job_id', 'rev', 'target', 'status', 'error', 'artifact_id')}
         return data
     rev = _revision(payload['rev'])
+    if action == 'repair':
+        from .repair import repair_job
+
+        if 'patch' in payload and 'value' in payload:
+            raise DomainError('INVALID_PAYLOAD', 'provide patch or value, not both')
+        repair_patch = payload.get('patch')
+        if repair_patch is not None:
+            repair_patch = _check_patch(store, job, rev, repair_patch)
+        budget = _repair_budget(store, job, rev)
+        return repair_job(
+            store, job, rev, payload['review'],
+            initial_rev=_revision(payload['initial_rev']) if 'initial_rev' in payload else None,
+            issue_id=payload.get('issue_id'), request_id=payload.get('request_id'),
+            patch=repair_patch, value=payload.get('value'),
+            budget_ok=budget.get('decision') == 'allow', budget=budget,
+        )
     if action == 'unlock':
         scope = payload['scope']
         command = f'UMP UNLOCK {job} {rev} {scope}'
@@ -925,7 +964,11 @@ _job_payload_schema = {
         'job_id': _identifier_type,
         'run_id': _identifier_type,
         'rev': {'type': 'integer', 'minimum': 1, 'maximum': 999999999},
+        'initial_rev': {'type': 'integer', 'minimum': 1, 'maximum': 999999999},
         'source_rev': {'type': 'integer', 'minimum': 1, 'maximum': 999999999},
+        'issue_id': {'type': 'string', 'minLength': 1, 'maxLength': 128},
+        'request_id': {'type': 'string', 'minLength': 1, 'maxLength': 128},
+        'review': {'type': 'object'},
         'scope': {'type': 'string', 'pattern': '^[a-z][a-z0-9_.-]{0,127}$'},
         'mode': {'type': 'string', 'enum': ['autonomous', 'collaborative', 'directed']},
         'requirements': {'type': 'object'},
@@ -975,10 +1018,10 @@ SCHEMAS = {
             'additionalProperties': False,
         },
     },
-    'ump_job': _schema('Create, read, revise, annotate or record explicit UMP approval. Load ump:motion-pipeline.', {
-        'action': {'type': 'string', 'enum': ['create', 'get', 'set_brief', 'research', 'write_naskah', 'import_naskah', 'select_style', 'revise', 'annotate', 'approve', 'write_composition', 'import_audio', 'lock', 'unlock', 'rollback']},
+    'ump_job': _schema('Create, read, revise, annotate or record explicit UMP approval and bounded QA repair. Load ump:motion-pipeline.', {
+        'action': {'type': 'string', 'enum': ['create', 'get', 'set_brief', 'research', 'write_naskah', 'import_naskah', 'select_style', 'revise', 'annotate', 'approve', 'write_composition', 'import_audio', 'lock', 'unlock', 'rollback', 'repair']},
         'payload': {**_job_payload_schema,
-                    'description': 'create: brief [mode, requirements]; write_composition: job_id, rev, value with bounded HTML and pinned metadata; import_audio: job_id, rev, track_id, kind bound to the current Telegram audio caption. Never pass filesystem paths for a composition or audio track.'},
+                    'description': 'create: brief [mode, requirements]; write_composition: job_id, rev, value with bounded HTML and pinned metadata; repair: job_id, rev, bound quality review, and optional patch or value; import_audio: job_id, rev, track_id, kind bound to the current Telegram audio caption. Never pass filesystem paths for a composition or audio track.'},
     }),
     'ump_render': _schema('Start a nonblocking run for the specified job revision: a document snapshot (brief, research, naskah, style_decision) or a render (style_frame, preview, final).', {
         'job_id': _identifier_type, 'rev': {'type': 'integer', 'minimum': 1},

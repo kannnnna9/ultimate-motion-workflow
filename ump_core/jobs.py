@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -234,6 +235,37 @@ class JobStore:
                 target TEXT NOT NULL, status TEXT NOT NULL, error TEXT,
                 snapshot_path TEXT NOT NULL, artifact_id TEXT
             );
+            CREATE TABLE IF NOT EXISTS quality_gates (
+                job_id TEXT PRIMARY KEY, required INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS quality_reviews (
+                job_id TEXT NOT NULL, rev INTEGER NOT NULL, run_id TEXT NOT NULL,
+                artifact_sha256 TEXT NOT NULL, report TEXT NOT NULL,
+                PRIMARY KEY(job_id, rev, run_id)
+            );
+            CREATE TABLE IF NOT EXISTS repair_chains (
+                job_id TEXT NOT NULL, initial_rev INTEGER NOT NULL, issue_id TEXT NOT NULL,
+                status TEXT NOT NULL, stop_reason TEXT, best_rev INTEGER NOT NULL,
+                best_run_id TEXT NOT NULL, best_issue_count INTEGER NOT NULL,
+                best_review TEXT NOT NULL, open_issues TEXT NOT NULL, best_reason TEXT NOT NULL,
+                PRIMARY KEY(job_id, initial_rev, issue_id)
+            );
+            CREATE TABLE IF NOT EXISTS repair_attempts (
+                job_id TEXT NOT NULL, initial_rev INTEGER NOT NULL, issue_id TEXT NOT NULL,
+                request_id TEXT NOT NULL, request_sha256 TEXT NOT NULL, rev INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                PRIMARY KEY(job_id, initial_rev, issue_id, request_id),
+                FOREIGN KEY(job_id, initial_rev, issue_id)
+                    REFERENCES repair_chains(job_id, initial_rev, issue_id),
+                FOREIGN KEY(job_id, rev) REFERENCES revisions(job_id, rev)
+            );
+            CREATE TABLE IF NOT EXISTS repair_runs (
+                run_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, initial_rev INTEGER NOT NULL,
+                issue_id TEXT NOT NULL, request_id TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES runs(run_id),
+                FOREIGN KEY(job_id, initial_rev, issue_id, request_id)
+                    REFERENCES repair_attempts(job_id, initial_rev, issue_id, request_id)
+            );
             """)
         self._migrate_stage()
         with self._db() as db:
@@ -340,6 +372,326 @@ class JobStore:
             if digest != lock["protected_sha256"]:
                 raise DomainError("LOCK_CONFLICT", f"{lock['scope']} is locked from revision {lock['lock_rev']}")
 
+    @staticmethod
+    def _validate_repair_context(job_id, context):
+        if context is None:
+            return None
+        if (not isinstance(context, dict) or context.get("job_id") != job_id
+                or type(context.get("initial_rev")) is not int or context["initial_rev"] < 1
+                or not isinstance(context.get("issue_id"), str)
+                or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", context["issue_id"])
+                or not isinstance(context.get("request_id"), str)
+                or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", context["request_id"])
+                or not isinstance(context.get("request_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", context["request_sha256"])):
+            raise DomainError("INVALID_REPAIR_REQUEST", "repair context is malformed")
+        return context
+
+    @staticmethod
+    def _repair_existing(db, context):
+        if context is None:
+            return None
+        row = db.execute(
+            "SELECT * FROM repair_attempts WHERE job_id=? AND initial_rev=? AND issue_id=? AND request_id=?",
+            (context["job_id"], context["initial_rev"], context["issue_id"], context["request_id"]),
+        ).fetchone()
+        if row is not None and row["request_sha256"] != context["request_sha256"]:
+            raise DomainError("IDEMPOTENCY_CONFLICT", "request_id was already used for different repair input")
+        return row
+
+    @staticmethod
+    def _record_repair_attempt(db, context, rev):
+        if context is None:
+            return
+        if context["initial_rev"] > rev:
+            raise DomainError("REPAIR_CHAIN_MISMATCH", "initial_rev cannot be newer than the new revision")
+        chain = db.execute(
+            "SELECT 1 FROM repair_chains WHERE job_id=? AND initial_rev=? AND issue_id=?",
+            (context["job_id"], context["initial_rev"], context["issue_id"]),
+        ).fetchone()
+        if chain is None:
+            raise DomainError("REPAIR_CHAIN_NOT_FOUND", "record the bound review before revising source")
+        attempts = db.execute(
+            "SELECT COUNT(*) FROM repair_attempts WHERE job_id=? AND initial_rev=? AND issue_id=?",
+            (context["job_id"], context["initial_rev"], context["issue_id"]),
+        ).fetchone()[0]
+        if attempts >= 3:
+            raise DomainError("REPAIR_LIMIT", "three automatic repair cycles have already been used")
+        db.execute(
+            "INSERT INTO repair_attempts "
+            "(job_id, initial_rev, issue_id, request_id, request_sha256, rev, status) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (context["job_id"], context["initial_rev"], context["issue_id"],
+             context["request_id"], context["request_sha256"], rev, "revision_created"),
+        )
+        db.execute(
+            "UPDATE repair_chains SET status='revision_created', stop_reason=NULL "
+            "WHERE job_id=? AND initial_rev=? AND issue_id=?",
+            (context["job_id"], context["initial_rev"], context["issue_id"]),
+        )
+
+    @staticmethod
+    def _validated_quality_report(review):
+        from .quality import QualityError, build_review
+
+        if not isinstance(review, dict):
+            raise DomainError("INVALID_REVIEW", "expected a T1 quality report")
+        try:
+            raw = json.dumps(review, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+            if len(raw.encode("utf-8")) > 1_048_576:
+                raise DomainError("INVALID_REVIEW", "T1 report exceeds 1 MiB")
+        except (TypeError, ValueError, UnicodeEncodeError, RecursionError) as exc:
+            raise DomainError("INVALID_REVIEW", "T1 report must be bounded JSON") from exc
+        binding = review.get("binding")
+        categories = ("technical", "motion", "visual", "editorial")
+        if not isinstance(binding, dict) or any(not isinstance(review.get(name), dict) for name in categories):
+            raise DomainError("INVALID_REVIEW", "T1 report categories or binding are missing")
+        checks = []
+        for category in categories:
+            section = review[category]
+            if not isinstance(section.get("checks"), list):
+                raise DomainError("INVALID_REVIEW", "T1 report checks are malformed")
+            checks.extend({**check, "category": category} for check in section["checks"]
+                          if isinstance(check, dict))
+            if len(checks) != sum(len(review[name]["checks"]) for name in categories[:categories.index(category) + 1]):
+                raise DomainError("INVALID_REVIEW", "T1 report contains a malformed check")
+        observations = review.get("observations")
+        evidence = review.get("evidence")
+        if not isinstance(observations, list) or not isinstance(evidence, list):
+            raise DomainError("INVALID_REVIEW", "T1 report observations or evidence are malformed")
+        try:
+            canonical = build_review(binding, checks, observations)
+        except (QualityError, TypeError, ValueError, KeyError) as exc:
+            raise DomainError("INVALID_REVIEW", "T1 report is not canonical") from exc
+        if set(review) != set(canonical):
+            raise DomainError("INVALID_REVIEW", "T1 report has unexpected fields")
+        if {key: value for key, value in canonical.items() if key != "evidence"} != {
+                key: value for key, value in review.items() if key != "evidence"}:
+            raise DomainError("INVALID_REVIEW", "T1 report decisions do not match its checks and observations")
+        check_evidence = canonical["evidence"]
+        if evidence[:len(check_evidence)] != check_evidence:
+            raise DomainError("INVALID_REVIEW", "T1 report check evidence does not match its checks")
+        for item in evidence[len(check_evidence):]:
+            if (not isinstance(item, dict) or set(item) != {"observation_index", "reference"}
+                    or type(item.get("observation_index")) is not int
+                    or not 0 <= item["observation_index"] < len(observations)):
+                raise DomainError("INVALID_REVIEW", "T1 report observation evidence is malformed")
+        canonical["evidence"] = evidence
+        return canonical
+
+    def record_quality_review(self, review: dict) -> dict:
+        canonical = self._validated_quality_report(review)
+        binding = canonical["binding"]
+        if (not isinstance(binding.get("job_id"), str) or not isinstance(binding.get("run_id"), str)
+                or type(binding.get("rev")) is not int or binding["rev"] < 1
+                or not isinstance(binding.get("artifact_sha256"), str)):
+            raise DomainError("INVALID_REVIEW", "T1 binding types are invalid")
+        with self._lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            run = db.execute(
+                "SELECT r.*, a.path, a.kind FROM runs r JOIN artifacts a "
+                "ON a.id=r.artifact_id AND a.job_id=r.job_id AND a.rev=r.rev "
+                "WHERE r.run_id=? AND r.job_id=? AND r.rev=?",
+                (binding["run_id"], binding["job_id"], binding["rev"]),
+            ).fetchone()
+            if run is None or run["target"] != "preview" or run["status"] != "finished" or run["kind"] != "preview":
+                raise DomainError("REVIEW_BINDING_MISMATCH", "review must name the finished preview run and artifact")
+            actual_hash = self._artifact_sha256(run["path"])
+            if not isinstance(binding["artifact_sha256"], str) or binding["artifact_sha256"].lower() != actual_hash:
+                raise DomainError("REVIEW_BINDING_MISMATCH", "review artifact hash does not match the actual preview")
+            encoded = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            db.execute(
+                "INSERT OR REPLACE INTO quality_reviews(job_id, rev, run_id, artifact_sha256, report) "
+                "VALUES (?,?,?,?,?)",
+                (binding["job_id"], binding["rev"], binding["run_id"], actual_hash, encoded),
+            )
+            db.execute("INSERT OR REPLACE INTO quality_gates(job_id, required) VALUES (?,1)",
+                       (binding["job_id"],))
+            linked = db.execute("SELECT * FROM repair_runs WHERE run_id=?", (binding["run_id"],)).fetchone()
+            if linked is not None:
+                db.execute(
+                    "UPDATE repair_attempts SET status='reviewed' WHERE job_id=? AND initial_rev=? "
+                    "AND issue_id=? AND request_id=?",
+                    (linked["job_id"], linked["initial_rev"], linked["issue_id"], linked["request_id"]),
+                )
+            db.commit()
+        return canonical
+
+    def repair_attempt_count(self, job_id: str, initial_rev: int, issue_id: str) -> int:
+        with self._db() as db:
+            self._job(db, job_id)
+            return db.execute(
+                "SELECT COUNT(*) FROM repair_attempts WHERE job_id=? AND initial_rev=? AND issue_id=?",
+                (job_id, initial_rev, issue_id),
+            ).fetchone()[0]
+
+    def get_repair_attempt(self, job_id: str, initial_rev: int, issue_id: str, request_id: str) -> dict | None:
+        with self._db() as db:
+            self._job(db, job_id)
+            row = db.execute(
+                "SELECT * FROM repair_attempts WHERE job_id=? AND initial_rev=? AND issue_id=? AND request_id=?",
+                (job_id, initial_rev, issue_id, request_id),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def get_repair_attempt_for_revision(self, job_id: str, rev: int) -> dict | None:
+        with self._db() as db:
+            self._job(db, job_id)
+            row = db.execute(
+                "SELECT * FROM repair_attempts WHERE job_id=? AND rev=? ORDER BY rowid DESC LIMIT 1",
+                (job_id, rev),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def ensure_repair_chain(self, job_id: str, initial_rev: int, issue_id: str, review: dict,
+                            *, issue_count: int, open_issues: list) -> dict:
+        binding = review.get("binding") if isinstance(review, dict) else None
+        if (not isinstance(binding, dict) or binding.get("job_id") != job_id
+                or type(initial_rev) is not int or initial_rev < 1
+                or type(issue_count) is not int or issue_count < 0 or not isinstance(open_issues, list)):
+            raise DomainError("INVALID_REPAIR_CHAIN", "chain metadata is malformed")
+        review_rev, run_id = binding.get("rev"), binding.get("run_id")
+        if type(review_rev) is not int or review_rev < initial_rev or not isinstance(run_id, str):
+            raise DomainError("INVALID_REPAIR_CHAIN", "review does not identify a revision in this chain")
+        encoded_review = json.dumps(review, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        encoded_issues = json.dumps(open_issues, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        with self._lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._job(db, job_id)
+            row = db.execute(
+                "SELECT * FROM repair_chains WHERE job_id=? AND initial_rev=? AND issue_id=?",
+                (job_id, initial_rev, issue_id),
+            ).fetchone()
+            if row is None:
+                if review_rev != initial_rev:
+                    raise DomainError("REPAIR_CHAIN_MISMATCH", "the initial review must bind to initial_rev")
+                db.execute(
+                    "INSERT INTO repair_chains "
+                    "(job_id, initial_rev, issue_id, status, stop_reason, best_rev, best_run_id, "
+                    "best_issue_count, best_review, open_issues, best_reason) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (job_id, initial_rev, issue_id, "active", None, review_rev, run_id,
+                     issue_count, encoded_review, encoded_issues,
+                     f"best preview rev {review_rev} has {issue_count} mandatory open issue(s)"),
+                )
+            else:
+                linked = review_rev == initial_rev or db.execute(
+                    "SELECT 1 FROM repair_attempts WHERE job_id=? AND initial_rev=? AND issue_id=? AND rev=?",
+                    (job_id, initial_rev, issue_id, review_rev),
+                ).fetchone()
+                if not linked:
+                    raise DomainError("REPAIR_CHAIN_MISMATCH", "review revision was not created by this repair chain")
+                if issue_count < row["best_issue_count"]:
+                    db.execute(
+                        "UPDATE repair_chains SET best_rev=?, best_run_id=?, best_issue_count=?, "
+                        "best_review=?, open_issues=?, best_reason=? "
+                        "WHERE job_id=? AND initial_rev=? AND issue_id=?",
+                        (review_rev, run_id, issue_count, encoded_review, encoded_issues,
+                         f"best preview rev {review_rev} has {issue_count} mandatory open issue(s)",
+                         job_id, initial_rev, issue_id),
+                    )
+            db.commit()
+        result = self.get_repair_chain(job_id, initial_rev, issue_id)
+        if result is None:
+            raise DomainError("REPAIR_CHAIN_NOT_FOUND", issue_id)
+        return result
+
+    def set_repair_state(self, job_id: str, initial_rev: int, issue_id: str,
+                         status: str, stop_reason: str | None) -> None:
+        allowed = {"active", "revision_created", "rendering", "awaiting_review", "reviewed",
+                   "render_failed", "pending_review", "complete", "stopped"}
+        if status not in allowed:
+            raise DomainError("INVALID_REPAIR_STATE", status)
+        with self._lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            result = db.execute(
+                "UPDATE repair_chains SET status=?, stop_reason=?, "
+                "best_reason=CASE WHEN ? IS NULL THEN best_reason ELSE "
+                "'best preview rev ' || best_rev || ' retained; ' || ? || '; ' || "
+                "best_issue_count || ' mandatory open issue(s) remain' END "
+                "WHERE job_id=? AND initial_rev=? AND issue_id=?",
+                (status, stop_reason, stop_reason, stop_reason, job_id, initial_rev, issue_id),
+            )
+            if result.rowcount != 1:
+                raise DomainError("REPAIR_CHAIN_NOT_FOUND", issue_id)
+            db.commit()
+
+    @staticmethod
+    def _repair_status(db, row):
+        chain = dict(row)
+        history = []
+        attempts = db.execute(
+            "SELECT * FROM repair_attempts WHERE job_id=? AND initial_rev=? AND issue_id=? ORDER BY rev, rowid",
+            (row["job_id"], row["initial_rev"], row["issue_id"]),
+        ).fetchall()
+        for attempt in attempts:
+            run_ids = [item["run_id"] for item in db.execute(
+                "SELECT run_id FROM repair_runs WHERE job_id=? AND initial_rev=? AND issue_id=? AND request_id=? ORDER BY rowid",
+                (attempt["job_id"], attempt["initial_rev"], attempt["issue_id"], attempt["request_id"]),
+            )]
+            history.append({"rev": attempt["rev"], "request_id": attempt["request_id"],
+                            "status": attempt["status"], "run_ids": run_ids})
+        try:
+            chain["best_review"] = json.loads(chain.pop("best_review"))
+            chain["open_issues"] = json.loads(chain["open_issues"])
+        except (TypeError, ValueError) as exc:
+            raise DomainError("INVALID_REPAIR_CHAIN", "stored repair diagnosis is malformed") from exc
+        chain["attempts"] = len(history)
+        chain["remaining"] = max(0, 3 - len(history))
+        chain["history"] = history
+        return chain
+
+    def get_repair_chain(self, job_id: str, initial_rev: int, issue_id: str | None) -> dict | None:
+        if issue_id is None:
+            return None
+        with self._db() as db:
+            self._job(db, job_id)
+            row = db.execute(
+                "SELECT * FROM repair_chains WHERE job_id=? AND initial_rev=? AND issue_id=?",
+                (job_id, initial_rev, issue_id),
+            ).fetchone()
+            return self._repair_status(db, row) if row is not None else None
+
+    def repair_revision(self, job_id: str, rev: int, *, patch: dict | None, value: dict | None,
+                        repair_context: dict) -> dict:
+        context = self._validate_repair_context(job_id, repair_context)
+        if (patch is None) == (value is None):
+            raise DomainError("INVALID_REPAIR_REQUEST", "provide exactly one planner/editor change")
+        if value is not None:
+            return self.write_composition(job_id, rev, value, repair_context=context)
+        return self.revise(job_id, rev, patch, repair_context=context)
+
+    def _check_quality_final(self, db, job_id: str, rev: int) -> None:
+        gate = db.execute("SELECT required FROM quality_gates WHERE job_id=?", (job_id,)).fetchone()
+        if gate is None or gate["required"] != 1:
+            return
+        run = db.execute(
+            "SELECT r.run_id, r.artifact_id, a.path FROM runs r LEFT JOIN artifacts a "
+            "ON a.id=r.artifact_id AND a.job_id=r.job_id AND a.rev=r.rev "
+            "WHERE r.job_id=? AND r.rev=? AND r.target='preview' AND r.status='finished' "
+            "ORDER BY r.rowid DESC LIMIT 1",
+            (job_id, rev),
+        ).fetchone()
+        if run is None or run["artifact_id"] is None or run["path"] is None:
+            raise DomainError("CREATIVE_REVIEW_REQUIRED", "current preview has not been reviewed")
+        report_row = db.execute(
+            "SELECT artifact_sha256, report FROM quality_reviews WHERE job_id=? AND rev=? AND run_id=?",
+            (job_id, rev, run["run_id"]),
+        ).fetchone()
+        if report_row is None:
+            raise DomainError("CREATIVE_REVIEW_REQUIRED", "current preview has no bound quality report")
+        actual_hash = self._artifact_sha256(run["path"])
+        try:
+            report = json.loads(report_row["report"])
+        except (TypeError, ValueError) as exc:
+            raise DomainError("CREATIVE_REVIEW_REQUIRED", "stored quality report is malformed") from exc
+        binding = report.get("binding") if isinstance(report, dict) else None
+        if (report_row["artifact_sha256"] != actual_hash or not isinstance(binding, dict)
+                or binding.get("job_id") != job_id or binding.get("rev") != rev
+                or binding.get("run_id") != run["run_id"] or binding.get("artifact_sha256", "").lower() != actual_hash
+                or report.get("overall_status") != "pass"):
+            raise DomainError("CREATIVE_REVIEW_REQUIRED", "current preview has a mandatory failure, pending review, or changed artifact")
+
     def _read_verified_custom_revision(self, job_id: str, source_rev: int, payload: dict):
         from .composition import (
             MAX_COMPOSITION_BYTES, MAX_PROJECT_BYTES, read_pinned_asset, read_pinned_audio,
@@ -422,17 +774,24 @@ class JobStore:
             db.commit()
         return self.get(job_id)
 
-    def write_composition(self, job_id: str, rev: int, value: dict) -> dict:
+    def write_composition(self, job_id: str, rev: int, value: dict, *, repair_context=None) -> dict:
         from .composition import (
             MAX_AUDIO_TRACK_BYTES, MAX_PINNED_ASSET_BYTES, MAX_PROJECT_BYTES,
             validate_audio_library, validate_audio_manifest, validate_composition,
         )
 
+        repair_context = self._validate_repair_context(job_id, repair_context)
         composition = validate_composition(value)
         with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
+            if self._repair_existing(db, repair_context) is not None:
+                db.commit()
+                return self.get(job_id)
             row = self._job(db, job_id)
             self._check_rev(row, rev)
+            if repair_context is not None and db.execute(
+                    "SELECT 1 FROM runs WHERE job_id=? AND status='running'", (job_id,)).fetchone():
+                raise DomainError("ALREADY_RUNNING", job_id)
             payload = json.loads(row["payload"])
             original_payload = copy.deepcopy(payload)
             has_composition = isinstance(payload.get("composition"), dict)
@@ -558,6 +917,8 @@ class JobStore:
             from .revision import impact as revision_impact
 
             decision = revision_impact(original_payload, payload)
+            if repair_context is not None and not decision["changed"]:
+                raise DomainError("EMPTY_REPAIR", "planner/editor change must alter an effective source input")
             self._check_locks(db, job_id, payload)
             rev_dir = self._job_dir(row["job_id"]) / "revisions" / str(new_rev)
             rev_dir.mkdir(parents=True, mode=0o700)
@@ -588,19 +949,27 @@ class JobStore:
                             "composition_draft", "custom HTML composition"))
                 db.execute("UPDATE jobs SET rev=?, payload=?, stage='composition_draft', status='draft', error=NULL WHERE job_id=?",
                            (new_rev, encoded, job_id))
+                self._record_repair_attempt(db, repair_context, new_rev)
                 db.commit()
             except Exception:
                 shutil.rmtree(rev_dir, ignore_errors=True)
                 raise
         return self.get(job_id)
 
-    def revise(self, job_id: str, rev: int, patch: dict) -> dict:
+    def revise(self, job_id: str, rev: int, patch: dict, *, repair_context=None) -> dict:
+        repair_context = self._validate_repair_context(job_id, repair_context)
         if not isinstance(patch, dict):
             raise DomainError("INVALID_PAYLOAD", "patch")
         with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
+            if self._repair_existing(db, repair_context) is not None:
+                db.commit()
+                return self.get(job_id)
             row = self._job(db, job_id)
             self._check_rev(row, rev)
+            if repair_context is not None and db.execute(
+                    "SELECT 1 FROM runs WHERE job_id=? AND status='running'", (job_id,)).fetchone():
+                raise DomainError("ALREADY_RUNNING", job_id)
             original_payload = json.loads(row["payload"])
             if "composition" in patch:
                 raise DomainError("USE_WRITE_COMPOSITION", "provide the complete validated composition value")
@@ -625,6 +994,8 @@ class JobStore:
             from .revision import impact as revision_impact
 
             decision = revision_impact(original_payload, payload)
+            if repair_context is not None and not decision["changed"]:
+                raise DomainError("EMPTY_REPAIR", "planner/editor change must alter an effective source input")
             self._check_locks(db, job_id, payload)
             new_rev = rev + 1
             custom = isinstance(original_payload.get("composition"), dict)
@@ -711,6 +1082,7 @@ class JobStore:
                     rollback = row["stage"]
                 db.execute("UPDATE jobs SET rev=?, payload=?, stage=?, status='draft', error=NULL WHERE job_id=?",
                            (new_rev, encoded, rollback, job_id))
+                self._record_repair_attempt(db, repair_context, new_rev)
                 db.commit()
             except Exception:
                 shutil.rmtree(rev_dir, ignore_errors=True)
@@ -939,6 +1311,8 @@ class JobStore:
             required = TARGET_STAGE[target]
             payload = json.loads(row["payload"])
             self._check_locks(db, job_id, payload)
+            if target == "final":
+                self._check_quality_final(db, job_id, rev)
             custom = isinstance(payload.get("composition"), dict)
             if custom and target == "preview":
                 required = "composition_draft"
@@ -961,6 +1335,25 @@ class JobStore:
             run_dir = self.root / "runs" / run_id
             run_dir.mkdir(parents=True)
             db.execute("INSERT INTO runs VALUES (?,?,?,?,?,?,?,?)", (run_id, job_id, rev, target, "running", None, snap.relative_to(self.root).as_posix(), None))
+            if target == "preview":
+                attempt = db.execute(
+                    "SELECT * FROM repair_attempts WHERE job_id=? AND rev=? ORDER BY rowid DESC LIMIT 1",
+                    (job_id, rev),
+                ).fetchone()
+                if attempt is not None:
+                    db.execute(
+                        "INSERT INTO repair_runs VALUES (?,?,?,?,?)",
+                        (run_id, attempt["job_id"], attempt["initial_rev"], attempt["issue_id"], attempt["request_id"]),
+                    )
+                    db.execute(
+                        "UPDATE repair_attempts SET status='rendering' WHERE job_id=? AND initial_rev=? "
+                        "AND issue_id=? AND request_id=?",
+                        (attempt["job_id"], attempt["initial_rev"], attempt["issue_id"], attempt["request_id"]),
+                    )
+                    db.execute(
+                        "UPDATE repair_chains SET status='rendering', stop_reason=NULL WHERE job_id=? AND initial_rev=? AND issue_id=?",
+                        (attempt["job_id"], attempt["initial_rev"], attempt["issue_id"]),
+                    )
             db.execute("UPDATE jobs SET status='running', error=NULL WHERE job_id=?", (job_id,))
             db.commit()
         return self.get_run(run_id)
@@ -1053,6 +1446,19 @@ class JobStore:
             elif additional_artifacts:
                 raise DomainError("INVALID_ARTIFACT", "failed run cannot publish additional outputs")
             db.execute("UPDATE runs SET status=?, error=? WHERE run_id=?", (status, error, run_id))
+            repair_link = db.execute("SELECT * FROM repair_runs WHERE run_id=?", (run_id,)).fetchone()
+            if repair_link is not None:
+                repair_status = "awaiting_review" if status == "finished" else "render_failed"
+                repair_reason = None if status == "finished" else "repair_render_failed"
+                db.execute(
+                    "UPDATE repair_attempts SET status=? WHERE job_id=? AND initial_rev=? AND issue_id=? AND request_id=?",
+                    (repair_status, repair_link["job_id"], repair_link["initial_rev"],
+                     repair_link["issue_id"], repair_link["request_id"]),
+                )
+                db.execute(
+                    "UPDATE repair_chains SET status=?, stop_reason=? WHERE job_id=? AND initial_rev=? AND issue_id=?",
+                    (repair_status, repair_reason, repair_link["job_id"], repair_link["initial_rev"], repair_link["issue_id"]),
+                )
             if status == "finished":
                 next_stage = {"style_frame": "style_frame", "preview": "preview", "final": "final_ready"}.get(run["target"])
                 from_stage = TARGET_STAGE.get(run["target"])
@@ -1134,6 +1540,11 @@ class JobStore:
                       "stage": row["stage"], "origin": row["origin"], "stage_history": history,
                       "mode": payload.get("mode", "collaborative"),
                       "requirements": payload.get("requirements", {})}
+            repairs = db.execute(
+                "SELECT * FROM repair_chains WHERE job_id=? ORDER BY initial_rev, issue_id", (job_id,),
+            ).fetchall()
+            if repairs:
+                result["repairs"] = [self._repair_status(db, item) for item in repairs]
             if "audio_library" in payload:
                 result["audio_library"] = payload["audio_library"]
             return result
