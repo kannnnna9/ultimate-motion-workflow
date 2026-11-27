@@ -390,6 +390,78 @@ class QualityMotionTests(unittest.TestCase):
         self.assertEqual(review["visual"]["status"], "fail")
         self.assertEqual(review["overall_status"], "fail")
 
+    def test_required_or_intent_conflict_failure_overrides_advisory(self):
+        binding = {"job_id": "job-1", "rev": 3, "run_id": "run-9",
+                   "artifact_sha256": "a" * 64}
+        baseline = [{"category": category, "status": "pass"}
+                    for category in ("technical", "motion", "visual", "editorial")]
+        for precedence in ({"required": True}, {"conflicts_with_intent": True},
+                           {"required": True, "conflicts_with_intent": True}):
+            with self.subTest(precedence=precedence):
+                failure = {"category": "visual", "status": "fail",
+                           "criterion": "legibility_required_by_brief", "advisory": True,
+                           "evidence_ref": "brief:legibility", **precedence}
+                review = build_review(binding, [*baseline, failure], [])
+                self.assertEqual(review["visual"]["status"], "fail")
+                self.assertEqual(review["overall_status"], "fail")
+                self.assertEqual(review["visual"]["checks"][-1]["status"], "fail")
+                self.assertTrue(review["visual"]["checks"][-1]["advisory"])
+                self.assertIn("brief:legibility",
+                              {item["reference"] for item in review["evidence"]})
+
+    def test_explicit_playback_requirement_without_observation_is_pending_in_any_category(self):
+        binding = {"job_id": "job-1", "rev": 3, "run_id": "run-9",
+                   "artifact_sha256": "a" * 64}
+        baseline = [{"category": category, "status": "pass"}
+                    for category in ("technical", "motion", "visual", "editorial")]
+        for category in ("technical", "motion", "visual", "editorial"):
+            with self.subTest(category=category):
+                check = {"category": category, "status": "pass",
+                         "criterion": f"required {category} playback", "requires_playback": True}
+                review = build_review(binding, [*baseline, check], [])
+                self.assertEqual(review[category]["status"], "pending_review")
+                self.assertEqual(review[category]["checks"][-1]["status"], "pending_review")
+
+    def test_matched_normal_speed_playback_approves_non_editorial_check(self):
+        artifact_sha256 = "a" * 64
+        check = self.playback_check(artifact_sha256)
+        check["category"] = "visual"
+        review = build_review(
+            {"job_id": "job-1", "rev": 3, "run_id": "run-9",
+             "artifact_sha256": artifact_sha256},
+            [check],
+            [],
+        )
+        self.assertEqual(review["visual"]["status"], "pass")
+        self.assertEqual(review["visual"]["checks"][0]["status"], "pass")
+
+    def test_advisory_playback_suggestion_does_not_block(self):
+        review = build_review(
+            {"job_id": "job-1", "rev": 3, "run_id": "run-9",
+             "artifact_sha256": "a" * 64},
+            [{"category": "visual", "status": "pass", "criterion": "suggested rhythm",
+              "requires_playback": True, "advisory": True}],
+            [],
+        )
+        self.assertEqual(review["visual"]["status"], "pass")
+        self.assertEqual(review["visual"]["checks"][0]["status"], "pass")
+
+    def test_timing_inference_is_editorial_only(self):
+        baseline = [{"category": category, "status": "pass"}
+                    for category in ("technical", "motion", "visual", "editorial")]
+        review = build_review(
+            {"job_id": "job-1", "rev": 3, "run_id": "run-9",
+             "artifact_sha256": "a" * 64},
+            [*baseline,
+             {"category": "technical", "status": "pass", "criterion": "timing"},
+             {"category": "editorial", "status": "pass", "criterion": "timing"}],
+            [],
+        )
+        self.assertEqual(review["technical"]["status"], "pass")
+        self.assertEqual(review["technical"]["checks"][-1]["status"], "pass")
+        self.assertEqual(review["editorial"]["status"], "pending_review")
+        self.assertEqual(review["editorial"]["checks"][-1]["status"], "pending_review")
+
 
 if __name__ == "__main__":
     unittest.main()

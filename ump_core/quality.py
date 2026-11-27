@@ -385,11 +385,18 @@ def _normalized_range(value: Any) -> tuple[float, float] | None:
     return start, end
 
 
-def _requires_playback(check: dict[str, Any]) -> bool:
+def _requires_playback(check: dict[str, Any], category: str) -> bool:
+    if check.get("requires_playback") is True:
+        return True
     criterion = check.get("criterion")
-    return (check.get("requires_playback") is True
-            or isinstance(criterion, str)
+    return (category == "editorial" and isinstance(criterion, str)
             and criterion.strip().lower() in {"pacing", "timing", "rhythm"})
+
+
+def _is_blocking_check(check: dict[str, Any]) -> bool:
+    return (check.get("advisory") is not True
+            or check.get("required") is True
+            or check.get("conflicts_with_intent") is True)
 
 
 def _playback_observation_matches(binding: dict[str, Any], check: dict[str, Any]) -> bool:
@@ -432,7 +439,7 @@ def _playback_observation_matches(binding: dict[str, Any], check: dict[str, Any]
 def _category_status(checks: list[dict[str, Any]]) -> str:
     if not checks:
         return "pending_review"
-    statuses = [check.get("status") for check in checks if check.get("advisory") is not True]
+    statuses = [check.get("status") for check in checks if _is_blocking_check(check)]
     if not statuses:
         return "pass"
     if "fail" in statuses:
@@ -469,12 +476,11 @@ def build_review(binding: dict[str, Any], checks: list[dict[str, Any]],
 
     category_reviews = {}
     for category in categories:
-        if category == "editorial":
-            for check in grouped[category]:
-                if (check.get("advisory") is not True and check["status"] == "pass"
-                        and _requires_playback(check)
-                        and not _playback_observation_matches(binding, check)):
-                    check["status"] = "pending_review"
+        for check in grouped[category]:
+            if (_is_blocking_check(check) and check["status"] == "pass"
+                    and _requires_playback(check, category)
+                    and not _playback_observation_matches(binding, check)):
+                check["status"] = "pending_review"
         status = _category_status(grouped[category])
         category_reviews[category] = {"status": status, "checks": grouped[category]}
 
