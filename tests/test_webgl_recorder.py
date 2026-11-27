@@ -71,15 +71,14 @@ class WebglRecorderRoutingTests(unittest.TestCase):
         worker._record_frames(directory, self.root, fake_command)
         self.assertTrue((directory / "frames.mp4").is_file())
 
-    def test_a_finished_capture_is_not_recorded_again(self):
-        """An interrupted encode leaves the PNGs; re-encoding is enough and the
-        capture (minutes of GPU time) must not be repeated."""
+    def test_unmanifested_raw_frames_do_not_skip_capture(self):
         directory = self.root / "run"
         raw = directory / "framesraw"
         raw.mkdir(parents=True)
         project = self.root / "project"
         project.mkdir()
         (project / "meta.json").write_text(json.dumps({"fps": 30, "duration_s": 0.1}))
+        (project / "index.html").write_text("<!doctype html><title>source A</title>")
         for i in range(3):
             (raw / f"f{i:05d}.png").write_bytes(b"png")
 
@@ -87,15 +86,15 @@ class WebglRecorderRoutingTests(unittest.TestCase):
 
         def fake_command(argv, cwd=None):
             calls.append(argv)
-            if "libx264" in argv:
-                (directory / "frames.mp4").write_bytes(b"mp4")
+            if "record_frames.mjs" in " ".join(map(str, argv)):
+                raise RuntimeError("capture interrupted")
+            self.fail("encoder must not run after interrupted capture")
 
-        with mock.patch.object(worker, "_frames_intact", return_value=False):
+        with self.assertRaisesRegex(RuntimeError, "capture interrupted"):
             worker._record_frames(directory, project, fake_command)
-        joined = [" ".join(map(str, c)) for c in calls]
-        self.assertFalse(any("record_frames.mjs" in j for j in joined),
-                         "capture was repeated although every frame was already present")
-        self.assertTrue(any("libx264" in j for j in joined))
+        self.assertEqual(len(calls), 1)
+        self.assertIn("record_frames.mjs", " ".join(map(str, calls[0])))
+        self.assertFalse((directory / "frames.mp4").exists())
 
     def test_a_partial_capture_is_refused_rather_than_encoded(self):
         directory = self.root / "run"

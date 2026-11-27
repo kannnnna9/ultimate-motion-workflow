@@ -8,11 +8,16 @@ import { chromium } from '/home/agentuser/ump-webgl-spike/node_modules/playwrigh
 import fs from 'node:fs';
 import path from 'node:path';
 
-const [,, projectDir, outMp4, fpsArg] = process.argv;
+const [,, projectDir, outMp4, fpsArg, framesDirArg] = process.argv;
 const FPS = Number(fpsArg || 30);
-const framesDir = path.join(path.dirname(outMp4), 'framesraw');
-fs.rmSync(framesDir, { recursive: true, force: true });
-fs.mkdirSync(framesDir, { recursive: true });
+const runDir = path.resolve(path.dirname(outMp4));
+const framesDir = framesDirArg ? path.resolve(framesDirArg) : path.join(runDir, 'framesraw');
+const finalParent = path.dirname(framesDir);
+if (finalParent !== runDir) {
+  throw new Error('frame output must be inside the run directory');
+}
+if (fs.existsSync(framesDir)) throw new Error('frame output already exists; refusing to reuse or delete it');
+const temporaryFramesDir = fs.mkdtempSync(path.join(finalParent, `.${path.basename(framesDir)}.tmp-`));
 
 const browser = await chromium.launch({
   executablePath: '/usr/bin/google-chrome',
@@ -41,7 +46,7 @@ for (let i = 0; i < total; i++) {
   }, t);
   if (strictMode) await page.waitForFunction(() => true);
   await page.screenshot({
-    path: path.join(framesDir, `f${String(i).padStart(5, '0')}.png`),
+    path: path.join(temporaryFramesDir, `f${String(i).padStart(5, '0')}.png`),
     animations: 'disabled',
     caret: 'initial',
     type: 'png',
@@ -50,4 +55,16 @@ for (let i = 0; i < total; i++) {
 }
 await browser.close();
 if (errors.length) process.stderr.write('page errors: ' + JSON.stringify(errors.slice(0, 3)) + '\n');
+const names = fs.readdirSync(temporaryFramesDir).sort();
+if (!Number.isInteger(total) || total < 1 || names.length !== total ||
+    names.some((name, index) => name !== `f${String(index).padStart(5, '0')}.png`)) {
+  throw new Error(`capture sequence incomplete: ${names.length} of ${total} frames`);
+}
+for (const name of names) {
+  const info = fs.lstatSync(path.join(temporaryFramesDir, name));
+  if (!info.isFile() || info.isSymbolicLink() || info.size < 1) {
+    throw new Error(`capture frame is not a regular PNG: ${name}`);
+  }
+}
+fs.renameSync(temporaryFramesDir, framesDir);
 process.stderr.write(`captured ${total} frames\n`);

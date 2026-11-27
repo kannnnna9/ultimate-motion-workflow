@@ -20,7 +20,7 @@ import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import resources, sandbox
+from . import render_cache, resources, sandbox
 from .jobs import DomainError, JobStore, read_bounded_regular_file
 
 # Code and data live apart on purpose.
@@ -463,7 +463,7 @@ def _mux(directory, episode, brand, cues, asset_root, target, command):
     return output
 
 
-def _render(store, run, directory, command, budget_check=None):
+def _render(store, run, directory, command, budget_check=None, *, deadline=None):
     from scripts.render import HYPERFRAMES_VERSION, probe
     snapshot, payload, episode, project, brand, cues = _stage(store, run, directory)
     hf = ['npx', '--yes', f'hyperframes@{HYPERFRAMES_VERSION}']
@@ -513,7 +513,10 @@ def _render(store, run, directory, command, budget_check=None):
         raise DomainError('INVALID_AUDIO_TIMING', 'word timings exceed recording duration')
     phase[0] = 'legacy_capture'
     if _records_own_frames(brand):
-        _record_frames(directory, project, guarded_command)
+        _record_frames(
+            directory, project, guarded_command, store=store, job_id=run['job_id'],
+            run_id=run['run_id'], deadline=deadline,
+        )
     else:
         hyper(['render', '--quality', 'draft' if target == 'preview' else 'delivery', '--workers', '1', '-o', str(directory / 'frames.mp4')])
     phase[0] = 'legacy_mux'
@@ -708,6 +711,174 @@ def _write_custom_karaoke(workspace, timeline, voice_track):
     return path, subtitle_bytes
 
 
+def _alignment_stage_inputs(audio_sha256, approved_text, duration_ms):
+    asr_root = CODE_ROOT / 'scripts' / 'asr'
+    try:
+        models = json.loads((asr_root / 'models.lock.json').read_text(encoding='utf-8'))['models']
+        versions = {name: {'repo': entry['repo'], 'revision': entry['revision'],
+                           'files': {item['filename']: item['sha256'] for item in entry['files']}}
+                    for name, entry in models.items()}
+        return {
+            'voice_sha256': audio_sha256,
+            'transcript_sha256': hashlib.sha256(approved_text.encode('utf-8')).hexdigest(),
+            'provider_model_versions': versions,
+            'settings': {
+                'language': 'id', 'provider_order': ['whisperx', 'faster-whisper'],
+                'duration_ms': duration_ms,
+                'aligner_sha256': _file_sha256(asr_root / 'align.py'),
+                'requirements_lock_sha256': _file_sha256(asr_root / 'requirements.lock'),
+                'timeline_validator_sha256': _file_sha256(CODE_ROOT / 'ump_core' / 'audio.py'),
+            },
+        }
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _cache_file(cache_root, stage, key, name):
+    if cache_root is None or key is None:
+        return None, 'cache identity unavailable'
+    candidate = render_cache.unit_path(cache_root, stage, key)
+    if render_cache.validate_unit(candidate, key):
+        try:
+            return render_cache.read_unit_file(candidate, key, name), 'verified stage unit'
+        except (OSError, ValueError, render_cache.CacheError):
+            return None, 'unit failed content validation'
+    return None, 'unit missing, old, or invalid'
+
+
+def _cache_publish_file(cache_root, stage, key, name, data):
+    if cache_root is None or key is None:
+        return False, 'cache identity unavailable'
+    if not isinstance(data, bytes) or not data:
+        return False, 'stage produced no cacheable bytes'
+    try:
+        if render_cache.cache_bytes(cache_root) + len(data) > resources.CACHE_RESERVE_BYTES:
+            return False, 'per-job cache reserve would be exceeded'
+        destination = render_cache.unit_path(cache_root, stage, key)
+        render_cache.publish_file_unit(destination, stage, key, {name: data})
+        return True, 'complete unit atomically published and verified'
+    except (OSError, ValueError, render_cache.CacheError) as exc:
+        return False, f'unit publication rejected: {type(exc).__name__}'
+
+
+def _timeline_digest(timeline):
+    encoded = json.dumps(timeline, ensure_ascii=False, sort_keys=True,
+                         separators=(',', ':'), allow_nan=False).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _valid_web_karaoke(data, canonical, voice_track):
+    if not isinstance(data, bytes) or not isinstance(canonical, bytes):
+        return False
+    try:
+        document = json.loads(data.decode('utf-8', 'strict'))
+        expected = json.loads(canonical.decode('utf-8', 'strict'))
+    except (UnicodeDecodeError, ValueError):
+        return False
+    required = {'schema_version', 'mode', 'effect', 'audio_sha256', 'duration_ms', 'canvas', 'style', 'groups'}
+    return (
+        isinstance(document, dict) and set(document) == required
+        and document.get('schema_version') == 1 and type(document.get('schema_version')) is int
+        and document.get('mode') == 'web' and document.get('effect') == 'karaoke'
+        and document.get('audio_sha256') == voice_track['sha256']
+        and document.get('duration_ms') == voice_track['duration_ms']
+        and document.get('canvas') == {'width': 1080, 'height': 1920}
+        and isinstance(document.get('style'), dict)
+        and isinstance(document.get('groups'), list) and bool(document['groups'])
+        and document == expected
+    )
+
+
+def _cached_custom_sidecar(cache_root, report, directory, workspace, timeline, voice_track,
+                           *, mode, style=None):
+    from .subtitles import render_karaoke_subtitles
+
+    inputs = {
+        'timeline_sha256': _timeline_digest(timeline),
+        'style': style,
+        'mode': mode,
+        'audio_sha256': voice_track['sha256'],
+        'track_duration_ms': voice_track['duration_ms'],
+        'dimensions': [1080, 1920],
+        'renderer_sha256': _file_sha256(CODE_ROOT / 'ump_core' / 'subtitles.py'),
+    }
+    key = render_cache.stage_key('sidecar', inputs)
+    filename = 'subtitles.ass' if mode == 'ass' else 'subtitles.json'
+    data, reason = _cache_file(cache_root, 'sidecar', key, filename)
+    canonical_web = None
+    if mode == 'web':
+        try:
+            canonical_web = render_karaoke_subtitles(
+                timeline, audio_sha256=voice_track['sha256'],
+                track_duration_ms=voice_track['duration_ms'], width=1080, height=1920,
+            )
+        except ValueError as exc:
+            raise DomainError('INVALID_SUBTITLE', str(exc)) from exc
+        if data is not None and not _valid_web_karaoke(data, canonical_web, voice_track):
+            data = None
+            reason = 'cached karaoke JSON failed schema, timeline, voice, or style validation'
+    if data is not None:
+        path = _write_private_bytes(workspace / filename, data)
+        _write_render_cache_report(directory, report, 'sidecar', 'hit', reason, key)
+        return path, data
+    if mode == 'ass':
+        path, data = _write_custom_subtitle(workspace, timeline, voice_track, style)
+    else:
+        path, data = _write_custom_karaoke(workspace, timeline, voice_track)
+        if not _valid_web_karaoke(data, canonical_web, voice_track):
+            raise DomainError('INVALID_SUBTITLE', 'invalid karaoke subtitle json for pinned timeline/style')
+    published, publish_reason = _cache_publish_file(cache_root, 'sidecar', key, filename, data)
+    decision = 'miss'
+    _write_render_cache_report(directory, report, 'sidecar', decision,
+                               f'{reason}; {publish_reason}' if not published else 'rendered on miss; ' + publish_reason, key)
+    return path, data
+
+
+def _custom_capture_key(html_bytes, project_bytes, asset_blobs, timing_bytes, karaoke_bytes, metadata, *, deadline=None):
+    runtime = _capture_runtime(CODE_ROOT / 'scripts' / 'record_custom.mjs', legacy=False, deadline=deadline)
+    if runtime is None:
+        return None
+    assets = {record['path']: hashlib.sha256(data).hexdigest() for record, data in asset_blobs}
+    timeline_bytes = b'\0'.join(item for item in (timing_bytes, karaoke_bytes) if item is not None)
+    return render_cache.stage_key('capture', {
+        'source_sha256': hashlib.sha256(html_bytes).hexdigest(),
+        'project_sha256': hashlib.sha256(project_bytes).hexdigest(),
+        'assets': assets,
+        'timeline_sha256': hashlib.sha256(timeline_bytes).hexdigest() if timeline_bytes else None,
+        **runtime,
+        'width': metadata['width'], 'height': metadata['height'], 'fps': metadata['fps'],
+        'frame_range': [0, metadata['duration_frames']],
+    })
+
+
+def _custom_mux_key(video_path, audio_paths, audio_manifest, subtitle_bytes, metadata, *, deadline=None):
+    try:
+        version = subprocess.run(
+            ['ffmpeg', '-version'], capture_output=True, text=True,
+            timeout=min(5, _remaining_seconds(deadline)) if deadline is not None else 5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    ffmpeg_version = (version.stdout or '').splitlines()[0] if version.returncode == 0 else ''
+    if not ffmpeg_version:
+        return None
+    return render_cache.stage_key('mux', {
+        'video_sha256': _file_sha256(video_path),
+        'audio_sha256': [_file_sha256(path) for path in audio_paths],
+        'subtitle_sha256': hashlib.sha256(subtitle_bytes).hexdigest() if subtitle_bytes is not None else None,
+        'encoder_settings': {
+            'implementation': 1,
+            'ffmpeg_version': ffmpeg_version,
+            'video': {'codec': 'libx264', 'preset': 'fast', 'crf': 18, 'pix_fmt': 'yuv420p',
+                      'fps': metadata['fps'], 'width': metadata['width'], 'height': metadata['height'],
+                      'frames': metadata['duration_frames'], 'threads': 2},
+            'audio': {'codec': 'aac', 'bitrate': '192k', 'sample_rate': 48000, 'channels': 2},
+            'tracks': audio_manifest,
+            'subtitle_burn_in': subtitle_bytes is not None,
+        },
+    })
+
+
 def _validate_custom_video(path, metadata, deadline, *, audio_enabled=False):
     try:
         result = subprocess.run(
@@ -752,7 +923,7 @@ def _validate_custom_video(path, metadata, deadline, *, audio_enabled=False):
 
 
 def _render_custom(store, run, directory, deadline, budget_check=None):
-    from .audio import resolve_speech_anchors
+    from .audio import resolve_speech_anchors, validate_speech_timeline
     from .composition import (
         MAX_COMPOSITION_BYTES, MAX_PROJECT_BYTES, MAX_REVISION_BYTES,
         read_pinned_asset, read_pinned_audio, validate_asset_manifest, validate_audio_manifest,
@@ -849,6 +1020,19 @@ def _render_custom(store, run, directory, deadline, budget_check=None):
         except (ImportError, ValueError) as exc:
             raise DomainError('TRANSCRIPT_REQUIRED', 'approved naskah has no usable narration') from exc
 
+    cache_root = _render_cache_root(store, run['job_id'])
+    cache_report = {
+        'schema_version': 1,
+        'job_id': run['job_id'],
+        'rev': run['rev'],
+        'run_id': run.get('run_id'),
+        'partial_resume': {
+            'decision': 'disabled',
+            'reason': 'custom renderer streams from frame zero; no complete resumable unit is available',
+        },
+        'stages': {},
+    }
+    _write_render_cache_report(directory, cache_report)
 
     if budget_check is not None:
         budget_check('custom_workspace')
@@ -900,11 +1084,56 @@ def _render_custom(store, run, directory, deadline, budget_check=None):
             naskah_path = _write_private_bytes(workspace / 'naskah.json', naskah_bytes)
             if budget_check is not None:
                 budget_check('custom_asr')
-            timeline = _align_voice_timeline(
-                workspace, audio_path_by_track[voice_record['track_id']], naskah_path,
-                audio_sha256=voice_record['sha256'], duration_ms=voice_record['duration_ms'],
-                approved_text=approved_text, deadline=deadline,
+            alignment_inputs = _alignment_stage_inputs(
+                voice_record['sha256'], approved_text, voice_record['duration_ms'],
             )
+            alignment_key = render_cache.stage_key('alignment', alignment_inputs) if alignment_inputs else None
+            cached_timeline, alignment_reason = _cache_file(
+                cache_root, 'alignment', alignment_key, 'timeline.json',
+            )
+            if cached_timeline is not None:
+                try:
+                    candidate = json.loads(cached_timeline.decode('utf-8', 'strict'))
+                    candidate = validate_speech_timeline(
+                        candidate, audio_sha256=voice_record['sha256'],
+                        duration_ms=voice_record['duration_ms'],
+                    )
+                    if (candidate.get('approved_transcript') != approved_text
+                            or candidate.get('status') not in {'aligned', 'estimated'}):
+                        raise ValueError('cached alignment does not match the current approved transcript')
+                    timeline = candidate
+                    _write_render_cache_report(directory, cache_report, 'alignment', 'hit', alignment_reason, alignment_key)
+                except (UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+                    cached_timeline = None
+                    alignment_reason = 'cached timeline failed validation'
+            if timeline is None:
+                _write_render_cache_report(directory, cache_report, 'alignment', 'miss', alignment_reason, alignment_key)
+                timeline = _align_voice_timeline(
+                    workspace, audio_path_by_track[voice_record['track_id']], naskah_path,
+                    audio_sha256=voice_record['sha256'], duration_ms=voice_record['duration_ms'],
+                    approved_text=approved_text, deadline=deadline,
+                )
+                try:
+                    timeline = validate_speech_timeline(
+                        timeline, audio_sha256=voice_record['sha256'],
+                        duration_ms=voice_record['duration_ms'],
+                    )
+                except ValueError as exc:
+                    raise DomainError('INVALID_SPEECH_TIMELINE', str(exc)) from exc
+                if (timeline.get('approved_transcript') != approved_text
+                        or timeline.get('status') not in {'aligned', 'estimated'}):
+                    raise DomainError('SPEECH_ALIGNMENT_FAILED', 'alignment did not resolve the approved transcript')
+                timeline_bytes = json.dumps(
+                    timeline, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False,
+                ).encode('utf-8')
+                published, publish_reason = _cache_publish_file(
+                    cache_root, 'alignment', alignment_key, 'timeline.json', timeline_bytes,
+                )
+                _write_render_cache_report(
+                    directory, cache_report, 'alignment', 'miss',
+                    f'alignment executed; {publish_reason}' if published else f'alignment executed; {publish_reason}',
+                    alignment_key,
+                )
             resolved_anchors = resolve_speech_anchors(
                 timeline, validated['speech_anchors'], video_duration_ms=video_duration_ms,
             )
@@ -925,12 +1154,36 @@ def _render_custom(store, run, directory, deadline, budget_check=None):
             ).encode('utf-8') + bytes([10])
             speech_timeline_path = _write_private_bytes(workspace / 'speech_timeline.json', speech_timeline_bytes)
             if validated['subtitle_mode'] == 'ass':
-                subtitle_path, subtitle_bytes = _write_custom_subtitle(
-                    workspace, timeline, voice_record, validated.get('ass_style'),
+                subtitle_path, subtitle_bytes = _cached_custom_sidecar(
+                    cache_root, cache_report, directory, workspace, timeline, voice_record,
+                    mode='ass', style=validated.get('ass_style'),
                 )
             elif validated['subtitle_mode'] == 'web':
-                karaoke_path, karaoke_bytes = _write_custom_karaoke(workspace, timeline, voice_record)
+                karaoke_path, karaoke_bytes = _cached_custom_sidecar(
+                    cache_root, cache_report, directory, workspace, timeline, voice_record, mode='web',
+                )
 
+        capture_key = None
+        if needs_timing:
+            try:
+                timing_bytes = timing_path.read_bytes() if timing_path is not None else None
+                capture_key = _custom_capture_key(
+                    html_bytes, project_bytes, asset_blobs, timing_bytes,
+                    karaoke_bytes, metadata, deadline=deadline,
+                )
+            except (OSError, ValueError, TypeError):
+                capture_key = None
+        else:
+            try:
+                capture_key = _custom_capture_key(
+                    html_bytes, project_bytes, asset_blobs, None, None, metadata, deadline=deadline,
+                )
+            except (OSError, ValueError, TypeError):
+                capture_key = None
+        _write_render_cache_report(
+            directory, cache_report, 'capture', 'miss',
+            'custom streaming renderer starts at frame zero; partial range reuse is disabled', capture_key,
+        )
         if budget_check is not None:
             budget_check('custom_capture')
         work_video = workspace / 'preview.partial.mp4'
@@ -999,43 +1252,69 @@ def _render_custom(store, run, directory, deadline, budget_check=None):
         if ffmpeg_status:
             detail = _tail_text(ffmpeg_tail, workspace)
             raise DomainError('RENDER_FAILED', f'FFmpeg exit {ffmpeg_status}: {detail}')
+        _validate_custom_video(work_video, {**validated, 'audio_enabled': False}, deadline, audio_enabled=False)
 
         final_workspace_video = work_video
         if metadata['audio_enabled']:
             if budget_check is not None:
                 budget_check('custom_mux')
+            audio_paths = [audio_path_by_track[record['track_id']] for record in audio_manifest]
             muxed_video = workspace / 'muxed.partial.mp4'
-            mux_argv = _build_custom_mux_argv(
-                work_video,
-                [audio_path_by_track[record['track_id']] for record in audio_manifest],
-                audio_manifest,
-                muxed_video,
-                metadata,
-                subtitle_filename='subtitles.ass' if subtitle_path is not None else None,
+            mux_key = _custom_mux_key(
+                work_video, audio_paths, audio_manifest,
+                subtitle_bytes if subtitle_path is not None else None, metadata, deadline=deadline,
             )
-            mux_process, mux_unit = sandbox.start_isolated(
-                mux_argv, workspace=workspace, timeout_s=_remaining_seconds(deadline),
-                private_pid_namespace=True,
-            )
-            if mux_process.stdout is None or mux_process.stderr is None:
-                raise DomainError('ISOLATION_UNAVAILABLE', 'FFmpeg mux pipes were not created')
-            for stream, buffer in ((mux_process.stderr, mux_tail), (mux_process.stdout, mux_stdout_tail)):
-                thread = threading.Thread(target=_drain_bounded, args=(stream, buffer), daemon=True)
-                thread.start()
-                drainers.append(thread)
-            mux_status = sandbox.wait_isolated(mux_process, mux_unit, timeout_s=_remaining_seconds(deadline))
-            for thread in drainers:
-                thread.join(timeout=5)
-            if any(thread.is_alive() for thread in drainers):
-                raise DomainError('RENDER_FAILED', 'FFmpeg mux output pipe did not close')
-            mux_process.stdout.close()
-            mux_process.stderr.close()
-            if mux_status == 124:
-                raise DomainError('RENDER_TIMEOUT', 'custom audio mux timed out')
-            if mux_status:
-                detail = _tail_text(mux_tail, workspace)
-                raise DomainError('RENDER_FAILED', f'FFmpeg mux exit {mux_status}: {detail}')
+            cached_mux, mux_reason = _cache_file(cache_root, 'mux', mux_key, 'mux.mp4')
+            mux_hit = False
+            if cached_mux is not None:
+                _write_private_bytes(muxed_video, cached_mux)
+                try:
+                    _validate_custom_video(muxed_video, validated, deadline, audio_enabled=True)
+                    mux_hit = True
+                except DomainError:
+                    muxed_video.unlink(missing_ok=True)
+                    mux_reason = 'cached mux failed complete media validation'
+            if mux_hit:
+                _write_render_cache_report(directory, cache_report, 'mux', 'hit', mux_reason, mux_key)
+            else:
+                _write_render_cache_report(directory, cache_report, 'mux', 'miss', mux_reason, mux_key)
+                mux_argv = _build_custom_mux_argv(
+                    work_video, audio_paths, audio_manifest, muxed_video, metadata,
+                    subtitle_filename='subtitles.ass' if subtitle_path is not None else None,
+                )
+                mux_process, mux_unit = sandbox.start_isolated(
+                    mux_argv, workspace=workspace, timeout_s=_remaining_seconds(deadline),
+                    private_pid_namespace=True,
+                )
+                if mux_process.stdout is None or mux_process.stderr is None:
+                    raise DomainError('ISOLATION_UNAVAILABLE', 'FFmpeg mux pipes were not created')
+                for stream, buffer in ((mux_process.stderr, mux_tail), (mux_process.stdout, mux_stdout_tail)):
+                    thread = threading.Thread(target=_drain_bounded, args=(stream, buffer), daemon=True)
+                    thread.start()
+                    drainers.append(thread)
+                mux_status = sandbox.wait_isolated(mux_process, mux_unit, timeout_s=_remaining_seconds(deadline))
+                for thread in drainers:
+                    thread.join(timeout=5)
+                if any(thread.is_alive() for thread in drainers):
+                    raise DomainError('RENDER_FAILED', 'FFmpeg mux output pipe did not close')
+                mux_process.stdout.close()
+                mux_process.stderr.close()
+                if mux_status == 124:
+                    raise DomainError('RENDER_TIMEOUT', 'custom audio mux timed out')
+                if mux_status:
+                    detail = _tail_text(mux_tail, workspace)
+                    raise DomainError('RENDER_FAILED', f'FFmpeg mux exit {mux_status}: {detail}')
+                _validate_custom_video(muxed_video, validated, deadline, audio_enabled=True)
+                published, publish_reason = _cache_publish_file(
+                    cache_root, 'mux', mux_key, 'mux.mp4', muxed_video.read_bytes(),
+                )
+                _write_render_cache_report(
+                    directory, cache_report, 'mux', 'miss',
+                    f'mux validated; {publish_reason}' if published else f'mux validated; {publish_reason}', mux_key,
+                )
             final_workspace_video = muxed_video
+        else:
+            _write_render_cache_report(directory, cache_report, 'mux', 'miss', 'mux stage not consumed by this composition', None)
 
         if budget_check is not None:
             budget_check('custom_publish')
@@ -1145,70 +1424,294 @@ def _records_own_frames(brand):
     return preset.get('renderer') == 'webgl'
 
 
-def _record_frames(directory, project, command):
-    """Capture the project frame by frame with record_frames.mjs, then encode.
-
-    The recorder writes PNG frames; encoding happens here so the rest of the
-    pipeline still receives exactly one frames.mp4 like the HyperFrames path.
-
-    A capture that was cut short (worker killed, machine restarted, an encoding
-    run interrupted) leaves its PNGs behind. If the frame count already matches
-    the expected duration, skip the capture and only re-encode: re-recording 680
-    frames costs minutes and gains nothing.
-    """
-    fps = 30
-    raw = directory / 'framesraw'
-    expected = None
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(path, flags)
     try:
-        meta = json.loads((project / 'meta.json').read_text(encoding='utf-8'))
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError('input is not a regular file')
+        with os.fdopen(fd, 'rb', closefd=False) as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(chunk)
+        after = os.fstat(fd)
+        if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ValueError('input changed while hashing')
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
+
+
+def _render_cache_root(store, job_id):
+    if store is None or not isinstance(job_id, str) or not ID.fullmatch(job_id):
+        return None
+    return owned(store.root, Path('jobs') / job_id / 'render-cache')
+
+
+def _write_render_cache_report(directory, report, stage=None, decision=None, reason=None, key=None):
+    if stage is not None:
+        report.setdefault('stages', {})[stage] = {
+            'decision': decision,
+            'reason': reason,
+            'key': key,
+        }
+    report_path = Path(directory) / 'render-cache.json'
+    temporary = Path(directory) / f'.render-cache-{uuid.uuid4().hex}.tmp'
+    raw = json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, report_path)
+
+
+def _capture_runtime(script, *, legacy, deadline=None):
+    if legacy:
+        browser = Path('/usr/bin/google-chrome')
+        try:
+            source = Path(script).read_text(encoding='utf-8')
+            match = re.search(r"from ['\"]([^'\"]*playwright-core/[^'\"]+)['\"]", source)
+            playwright_package = Path(match.group(1)).parent / 'package.json' if match else None
+        except OSError:
+            playwright_package = None
+    else:
+        browser = next((Path(item) for item in (
+            '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
+        ) if Path(item).is_file()), None)
+        playwright_package = CODE_ROOT / 'scripts' / 'node_modules' / 'playwright-core' / 'package.json'
+    if browser is None or not browser.is_file() or playwright_package is None or not playwright_package.is_file():
+        return None
+    try:
+        version_timeout = min(5, _remaining_seconds(deadline)) if deadline is not None else 5
+        result = subprocess.run([str(browser), '--version'], capture_output=True, text=True, timeout=version_timeout)
+        if result.returncode:
+            return None
+        browser_version = (result.stdout or result.stderr).strip()
+        package = json.loads(playwright_package.read_text(encoding='utf-8'))
+        playwright_version = package.get('version')
+        if not browser_version or not isinstance(playwright_version, str) or not playwright_version:
+            return None
+        return {
+            'browser': browser.name,
+            'browser_version': browser_version,
+            'playwright_version': playwright_version,
+            'backend': 'angle-swiftshader',
+            'backend_version': browser_version,
+            'capture_script_sha256': _file_sha256(script),
+        }
+    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+        return None
+
+
+def _legacy_capture_inputs(project, meta, runtime):
+    files = {}
+    for current, dirs, names in os.walk(project, followlinks=False):
+        current_path = Path(current)
+        for name in dirs:
+            if (current_path / name).is_symlink():
+                raise ValueError('project contains a symlinked directory')
+        for name in names:
+            path = current_path / name
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError('project contains a non-regular source')
+            relative = path.relative_to(project).as_posix()
+            files[relative] = _file_sha256(path)
+    source = files.get('index.html')
+    if source is None:
+        raise ValueError('project has no canonical index.html')
+    timeline_items = {name: digest for name, digest in files.items()
+                      if re.search(r'(?:timeline|timing|subtitle|caption)', name, re.I)}
+    timeline_sha256 = hashlib.sha256(json.dumps(
+        timeline_items, sort_keys=True, separators=(',', ':')).encode()).hexdigest() if timeline_items else None
+    return {
+        'source_sha256': source,
+        'project_files': files,
+        'timeline_sha256': timeline_sha256,
+        **runtime,
+        'width': int(meta.get('width') or 1080),
+        'height': int(meta.get('height') or 1920),
+        'fps': int(meta['fps']),
+        'frame_range': [0, int(round(float(meta.get('duration_s') or meta.get('duration')
+                                         or meta.get('durationSeconds')) * int(meta['fps'])))],
+    }
+
+
+def _remove_capture_scratch(raw, *, remove_raw):
+    raw = Path(raw)
+    if remove_raw and raw.is_dir() and not raw.is_symlink():
+        shutil.rmtree(raw, ignore_errors=True)
+    for temporary in raw.parent.glob(f'.{raw.name}.tmp-*'):
+        if temporary.is_dir() and not temporary.is_symlink():
+            shutil.rmtree(temporary, ignore_errors=True)
+
+
+def _record_frames(directory, project, command, *, store=None, job_id=None, run_id=None, deadline=None):
+    """Capture a complete sequence or reuse its verified job-private unit, then encode atomically."""
+    fps, expected, width, height = 30, None, 1080, 1920
+    meta = {}
+    raw = Path(directory) / 'framesraw'
+    try:
+        meta = json.loads((Path(project) / 'meta.json').read_text(encoding='utf-8'))
         fps = int(meta.get('fps') or 30)
+        width = int(meta.get('width') or 1080)
+        height = int(meta.get('height') or 1920)
         duration = meta.get('duration_s') or meta.get('duration') or meta.get('durationSeconds')
         if duration:
             expected = round(float(duration) * fps)
+        if fps < 1 or width < 1 or height < 1 or (expected is not None and expected < 1):
+            raise ValueError('capture metadata is outside range')
     except (OSError, ValueError, TypeError):
         expected = None
-    captured = len(list(raw.glob('f*.png'))) if raw.is_dir() else 0
-    complete = expected is not None and captured >= expected
-    if complete and _frames_intact(directory / 'frames.mp4'):
-        return  # nothing to do: the capture and its encode both survived
-    if not complete:
+
+    cache_root = _render_cache_root(store, job_id)
+    report = {
+        'schema_version': 1, 'job_id': job_id, 'run_id': run_id, 'partial_resume': {
+            'decision': 'disabled',
+            'reason': "partial capture-unit reuse is not implemented; only a verified full-range unit may be reused",
+        }, 'stages': {},
+    }
+    capture_key = None
+    cached_frames = None
+    cache_hit = False
+    raw_created_by_worker = False
+    cache_reason = 'cache unavailable; capture starts at frame zero'
+    if cache_root is not None and expected is not None:
+        runtime = _capture_runtime(ROOT / 'scripts' / 'record_frames.mjs', legacy=True, deadline=deadline)
+        if runtime is None:
+            cache_reason = 'browser or recorder version unavailable; cache identity is incomplete'
+        else:
+            try:
+                inputs = _legacy_capture_inputs(Path(project), meta, runtime)
+                capture_key = render_cache.stage_key('capture', inputs)
+                candidate = render_cache.unit_path(cache_root, 'capture', capture_key)
+                if render_cache.validate_unit(candidate, capture_key):
+                    cached_frames = candidate
+                    cache_hit = True
+                    cache_reason = 'verified complete full-range capture unit'
+                else:
+                    cache_reason = 'missing, old, or invalid capture unit; recapture starts at frame zero'
+            except (OSError, ValueError, render_cache.CacheError) as exc:
+                cache_reason = f'capture inputs/cache are unsafe: {type(exc).__name__}'
+
+    if cached_frames is None:
+        _write_render_cache_report(directory, report, 'capture', 'miss', cache_reason, capture_key)
+        if store is not None:
+            raw = Path(directory) / f'framesraw-{uuid.uuid4().hex}'
+            raw_created_by_worker = True
         node = ['node', str(ROOT / 'scripts' / 'record_frames.mjs'),
-                str(project), str(directory / 'frames.mp4'), str(fps)]
-        # The recorder owns framesraw and clears it itself: a pre-clean here made
-        # the existence check race the capture when a run was retried.
-        command(node, project)
-    if not raw.is_dir() or not any(raw.iterdir()):
-        raise DomainError('RENDER_FAILED', 'recorder produced no frames')
-    frames = sorted(raw.glob('f*.png'))
-    if expected is not None and len(frames) < expected:
-        raise DomainError('RENDER_FAILED',
-                          f'recorder captured {len(frames)} of {expected} frames')
-    command(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-framerate', str(fps),
-             '-i', str(raw / 'f%05d.png'), '-c:v', 'libx264', '-profile:v', 'high',
-             '-pix_fmt', 'yuv420p', '-crf', '18', '-threads', '2', str(directory / 'frames.mp4')], project)
-    if not (directory / 'frames.mp4').is_file():
-        raise DomainError('RENDER_FAILED', 'frame encode produced no video')
+                str(project), str(Path(directory) / 'frames.mp4'), str(fps)]
+        if store is not None:
+            node.append(str(raw))
+        try:
+            command(node, project)
+        except Exception:
+            _remove_capture_scratch(raw, remove_raw=raw_created_by_worker)
+            raise
+        if not raw.is_dir():
+            _remove_capture_scratch(raw, remove_raw=raw_created_by_worker)
+            raise DomainError('RENDER_FAILED', 'recorder produced no frames')
+        try:
+            entries = sorted(entry.name for entry in os.scandir(raw))
+        except OSError as exc:
+            _remove_capture_scratch(raw, remove_raw=raw_created_by_worker)
+            raise DomainError('RENDER_FAILED', 'recorder output is unavailable') from exc
+        expected_names = [f'f{index:05d}.png' for index in range(expected or len(entries))]
+        if not entries or entries != expected_names:
+            captured = len(entries)
+            _remove_capture_scratch(raw, remove_raw=raw_created_by_worker)
+            if expected is not None:
+                raise DomainError('RENDER_FAILED', f'recorder captured {captured} of {expected} frames or emitted unexpected indices')
+            raise DomainError('RENDER_FAILED', 'recorder emitted an invalid frame sequence')
+        if expected is not None and store is not None:
+            if not render_cache.validate_capture_source(raw, total_frames=expected, width=width, height=height):
+                _remove_capture_scratch(raw, remove_raw=raw_created_by_worker)
+                raise DomainError('RENDER_FAILED', 'capture contains an invalid, corrupt, or mismatched PNG sequence')
+        if expected is not None and store is not None and capture_key is not None:
+            try:
+                existing = render_cache.cache_bytes(cache_root)
+                size = sum((raw / name).stat().st_size for name in entries)
+                if existing + size <= resources.CACHE_RESERVE_BYTES:
+                    candidate = render_cache.unit_path(cache_root, 'capture', capture_key)
+                    cached_frames = render_cache.publish_capture_unit(
+                        candidate, capture_key, raw, total_frames=expected, width=width, height=height,
+                    )
+                    cache_reason = 'complete capture atomically published and verified'
+                else:
+                    cache_reason = 'capture is complete but exceeds the per-job cache reserve; this run encodes locally'
+            except (OSError, ValueError, render_cache.CacheError) as exc:
+                cache_reason = f'capture completed but cache publication failed: {type(exc).__name__}'
+        elif expected is None:
+            cache_reason = 'project frame range is unknown; cache reuse is disabled'
+        elif store is None:
+            cache_reason = 'no JobStore context; cache reuse is disabled'
 
-
-def _frames_intact(path):
-    """True when `path` looks like a finished MP4.
-
-    An interrupted encode leaves a header-only file with no `moov` atom. This
-    checks the box structure directly instead of shelling out to ffprobe, whose
-    helper exits the process on a failed probe — which would kill the worker
-    rather than let it re-encode.
-    """
+    decision = 'hit' if cache_hit else 'miss'
+    _write_render_cache_report(directory, report, 'capture', decision, cache_reason, capture_key)
+    frames_dir = cached_frames or raw
+    output = Path(directory) / 'frames.mp4'
+    temporary = Path(directory) / 'frames.partial.mp4' if store is not None else output
+    ffmpeg = ['ffmpeg', '-nostdin', '-v', 'error', '-y', '-framerate', str(fps),
+              '-i', str(frames_dir / 'f%05d.png'), '-c:v', 'libx264', '-profile:v', 'high',
+              '-pix_fmt', 'yuv420p', '-crf', '18', '-threads', '2', str(temporary)]
     try:
-        size = path.stat().st_size
-        if size < 1024:
+        command(ffmpeg, project)
+        if not temporary.is_file():
+            raise DomainError('RENDER_FAILED', 'frame encode produced no video')
+        if store is not None:
+            if not _frames_intact(
+                temporary, expected_frames=expected, fps=fps, width=width, height=height, deadline=deadline,
+            ):
+                raise DomainError('RENDER_FAILED', 'frame encode produced an incomplete or invalid MP4')
+            os.replace(temporary, output)
+    except Exception:
+        if store is not None:
+            temporary.unlink(missing_ok=True)
+        raise
+    finally:
+        _remove_capture_scratch(raw, remove_raw=raw_created_by_worker)
+
+
+def _frames_intact(path, *, expected_frames=None, fps=None, width=None, height=None, deadline=None):
+    """True only when FFprobe metadata and a full FFmpeg decode confirm the media."""
+    path = Path(path)
+    try:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size < 1024 or path.is_symlink():
             return False
-        with path.open('rb') as stream:
-            head = stream.read(64)
-            stream.seek(max(0, size - (8 << 20)))
-            tail = stream.read()
-    except OSError:
+        probe_timeout = min(30, _remaining_seconds(deadline)) if deadline is not None else 30
+        probe = subprocess.run(
+            ['ffprobe', '-v', 'error', '-count_frames', '-select_streams', 'v:0',
+             '-show_entries', 'stream=codec_type,codec_name,width,height,avg_frame_rate,nb_read_frames',
+             '-of', 'json', str(path)], capture_output=True, text=True, timeout=probe_timeout,
+        )
+        if probe.returncode:
+            return False
+        streams = json.loads(probe.stdout).get('streams', [])
+        if len(streams) != 1:
+            return False
+        stream = streams[0]
+        if stream.get('codec_type') != 'video' or stream.get('codec_name') != 'h264':
+            return False
+        if width is not None and stream.get('width') != width:
+            return False
+        if height is not None and stream.get('height') != height:
+            return False
+        if fps is not None and stream.get('avg_frame_rate') != f'{fps}/1':
+            return False
+        if expected_frames is not None and stream.get('nb_read_frames') != str(expected_frames):
+            return False
+        decode_timeout = min(60, _remaining_seconds(deadline)) if deadline is not None else 60
+        decoded = subprocess.run(
+            ['ffmpeg', '-nostdin', '-v', 'error', '-xerror', '-i', str(path), '-f', 'null', '-'],
+            capture_output=True, text=True, timeout=decode_timeout,
+        )
+        return decoded.returncode == 0
+    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
         return False
-    return head[4:8] == b'ftyp' and b'moov' in tail
 
 
 def _document(store, run, directory):
@@ -1338,7 +1841,7 @@ def execute_run(store: JobStore, run_id: str, argv=None):
                             store, run, directory, deadline, budget_check=budget_check,
                         )
                     else:
-                        output = _render(store, run, directory, command, budget_check=budget_check)
+                        output = _render(store, run, directory, command, budget_check=budget_check, deadline=deadline)
                         budget_check('legacy_ready')
             result = directory / MEDIA[run['target']]
             output.replace(result)
@@ -1365,7 +1868,7 @@ def execute_run(store: JobStore, run_id: str, argv=None):
             error = str(exc).replace(str(directory), '<run>').replace('\n', ' ')[:500]
             # Keep the diagnostic log; staged copies and partial media are never published.
             removed = []
-            for name in ('frames.mp4', 'partial.mp4', 'preview.partial.mp4', 'final.partial.mp4',
+            for name in ('frames.mp4', 'frames.partial.mp4', 'partial.mp4', 'preview.partial.mp4', 'final.partial.mp4',
                          'source.zip', 'web-preview.html', 'speech_timeline.json', 'subtitles.ass', *MEDIA.values(), *DOCS.values()):
                 path = directory / name
                 if path.exists() or path.is_symlink():
