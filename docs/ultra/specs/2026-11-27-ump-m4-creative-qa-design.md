@@ -1,6 +1,6 @@
 # M4 — QA video, revisi terarah, dan pemulihan render
 
-**Status:** usulan desain untuk review operator; belum diimplementasikan. Baseline: `feat/ump-v2.0` @ `c548353`. Rujukan: master blueprint §6 (render dan resource), §10–11 (revisi dan QA), §M4, G4/G8/G9. M5, rilis, push, dan deployment di luar cakupan.
+**Status:** desain historis disetujui dan diimplementasikan pada `feat/ump-v2.0`; M4 ditutup 2026-11-28 setelah bukti teknis dan respons operator terhadap review 1×, terikat di `docs/verification/ump-v2-progress.md`. Baseline desain saat ditulis: `c548353`. Rujukan: master blueprint §6 (render dan resource), §10–11 (revisi dan QA), §M4, G4/G8/G9. Reuse parsial stateful dan cache mux ASS yang identitasnya tidak terbukti tetap dinonaktifkan; tidak ada klaim paritas PCM fixture bersuara. M5, rilis, push, dan deployment di luar cakupan.
 
 ## Hasil yang ingin dilihat operator
 
