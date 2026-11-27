@@ -18,7 +18,7 @@
 - [x] M2 — minimal reusable assets and meaningful articulated motion. T1–T4 verified: two original 7 s renders with pinned catalogue assets, articulated moth/koi motion, source-bundle hash cross-checks, and full regression.
 - [x] M3 — optional audio, WhisperX timing, and independent subtitles. Exit gates met on `feat/ump-v2.0`: WhisperX `aligned` 42 words on real Indonesian VO; working fallback via pinned `faster-whisper-small` (`estimated`, 42/42 words) proven by fallback-only render `FXslCZlTBaP9tJ03`; ASS and web-karaoke real runs with exclusive ownership, no duplicate speech, no-speech bypass, single-frame anchor sync; operator accepted the normal-subtitle render on 2026-11-27. Karaoke word-highlight preview `h8qPVAUtlpeniN2g` is rendered and technically verified but was not separately approved by the operator.
 - [x] M4 — evidence-based creative QA, bounded repair, revision locks, cache/recovery, and VM resource validation. T1–T6 verified on the isolated branch: expected wing-motion failure → one repaired preview; hold control; full regression; operator confirmed motion difference and accepted the appearance/tempo/framing in reply to an explicit 1× question on 2026-11-28. Exact job/rev/run hashes, immutable technical index, and separate bound operator-review addendum are below. This closes the **M4 milestone only**; no production approval, push, or M5 start.
-- [ ] M5 — four benchmarks, generalization exercise, release-candidate gate review.
+- [ ] M5 — four benchmarks, generalization exercise, release-candidate gate review. **Benchmarks rendered and technically verified on 2026-11-28** (`docs/verification/ump-v2-m5-benchmarks.md`); 1× operator playback and the creative verdict are still open.
 
 ## M0 — Foundation & safety
 
@@ -216,7 +216,7 @@ git diff --check → PASS
 
 ## Next
 
-M2 T1–T4 meet the blueprint gates on `feat/ump-v2.0`; focused commits: T1 `58683e0`, T2 `b7f7d1a`, T3 `ab84805`, T4 `bb20955`. M3 closed on 2026-11-27: WhisperX `aligned`, pinned `faster-whisper-small` fallback proven by a fallback-only render, ASS and web-karaoke ownership verified, operator accepted the normal-subtitle render. M4 closed on 2026-11-28 after bound technical proof and operator response to the 1× appearance/tempo/framing question (details below). **M5 remains pending**; do not start benchmarks, merge, push, release, change the production plugin, or deploy without separate operator authorization.
+M2 T1–T4 meet the blueprint gates on `feat/ump-v2.0`; focused commits: T1 `58683e0`, T2 `b7f7d1a`, T3 `ab84805`, T4 `bb20955`. M3 closed on 2026-11-27: WhisperX `aligned`, pinned `faster-whisper-small` fallback proven by a fallback-only render, ASS and web-karaoke ownership verified, operator accepted the normal-subtitle render. M4 closed on 2026-11-28 after bound technical proof and operator response to the 1× appearance/tempo/framing question (details below). M5 benchmarks were rendered on 2026-11-28 under explicit operator authorization ("Lanjut M5"); evidence is in `docs/verification/ump-v2-m5-benchmarks.md`. Do not merge, push, release, change the production plugin, or deploy without separate operator authorization.
 
 ## M4 Task 6 — partial evidence run (2026-11-27)
 
