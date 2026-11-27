@@ -23,6 +23,7 @@ from .worker import FIXTURES, ID, MEDIA, ROOT, _valid_words, episode_docs, owned
 _APPROVAL = re.compile(
     r'(?:UMP\s+APPROVE\s+([A-Za-z0-9_-]{16})\s+([1-9][0-9]{0,8})\s+'
     r'(brief|research|naskah|style|storyboard|script_style|preview)\s+([A-Za-z0-9_-]{16}))\Z')
+_UNLOCK = re.compile(r'UMP\s+UNLOCK\s+([A-Za-z0-9_-]{16})\s+([1-9][0-9]{0,8})\s+([a-z][a-z0-9_.-]{0,127})\Z')
 _AUDIO = re.compile(r'UMP VO ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8})\Z')
 _AUDIO_IMPORT = re.compile(
     r'UMP AUDIO ([A-Za-z0-9_-]{16}) ([1-9][0-9]{0,8}) ([a-z][a-z0-9_-]{0,47}) '
@@ -109,8 +110,10 @@ def inbound(event, gateway, **_):
     if getattr(raw, 'forward_origin', None) or getattr(raw, 'via_bot', None) or getattr(raw, 'is_automatic_forward', False):
         return
     text = event.text or ''
-    approval, voice, audio_import = _APPROVAL.fullmatch(text), _AUDIO.fullmatch(text), _AUDIO_IMPORT.fullmatch(text)
-    if not ((approval and event.message_type == MessageType.TEXT and not event.media_urls)
+    approval, unlock, voice, audio_import = (
+        _APPROVAL.fullmatch(text), _UNLOCK.fullmatch(text), _AUDIO.fullmatch(text), _AUDIO_IMPORT.fullmatch(text),
+    )
+    if not (((approval or unlock) and event.message_type == MessageType.TEXT and not event.media_urls)
             or ((voice or audio_import) and len(event.media_urls or ()) == 1
                 and len(event.media_types or ()) == 1 and event.media_types[0].startswith('audio/'))):
         return
@@ -211,7 +214,8 @@ def _remember_command(key, text, now):
     update even when the tool call runs in a different process.
     """
     match = _APPROVAL.fullmatch(' '.join((text or '').split()))
-    if not match:
+    unlock = _UNLOCK.fullmatch(' '.join((text or '').split()))
+    if not match and not unlock:
         return
     path = _command_path()
     path.parent.mkdir(mode=0o700, exist_ok=True)
@@ -220,8 +224,16 @@ def _remember_command(key, text, now):
     except (OSError, ValueError):
         data = {}
     stamp = f'{key[1]}:{key[2]}:{key[3]}'
-    data[stamp] = {'job': match.group(1), 'rev': int(match.group(2)),
-                   'stage': match.group(3), 'artifact': match.group(4), 'at': now}
+    if match:
+        data[stamp] = {
+            'command': ' '.join((text or '').split()), 'job': match.group(1), 'rev': int(match.group(2)),
+            'stage': match.group(3), 'artifact': match.group(4), 'at': now,
+        }
+    else:
+        data[stamp] = {
+            'command': ' '.join((text or '').split()), 'job': unlock.group(1),
+            'rev': int(unlock.group(2)), 'scope': unlock.group(3), 'at': now,
+        }
     data = {k: v for k, v in data.items() if now - v.get('at', 0) <= 600}
     tmp = path.with_suffix('.tmp')
     tmp.write_text(json.dumps(data))
@@ -246,7 +258,17 @@ def _claimed_command(expected, job_id, rev):
     entry = data.get(stamp)
     if not entry or time.monotonic() - entry.get('at', 0) > 600:
         return False
-    if entry.get('stage') != expected or entry.get('job') != job_id:
+    matches = entry.get('command') == expected and entry.get('job') == job_id
+    if not matches:
+        approval = _APPROVAL.fullmatch(expected)
+        if approval:
+            matches = (
+                entry.get('job') == job_id and entry.get('rev') == int(approval.group(2))
+                and entry.get('stage') == approval.group(3) and entry.get('artifact') == approval.group(4)
+            )
+        elif expected in {'brief', 'research', 'naskah', 'style', 'storyboard', 'script_style', 'preview'}:
+            matches = entry.get('job') == job_id and entry.get('stage') == expected
+    if not matches:
         return False
     if rev is not None and entry.get('rev') != rev:
         return False
@@ -710,6 +732,9 @@ def _job(store, action, payload):
         'import_naskah': (('job_id', 'rev', 'naskah', 'cue'), ('origin',)),
         'select_style': (('job_id', 'rev', 'style_id'), ()),
         'attach_storyboard': (('job_id', 'rev', 'storyboard'), ()),
+        'lock': (('job_id', 'rev', 'scope'), ()),
+        'unlock': (('job_id', 'rev', 'scope'), ()),
+        'rollback': (('job_id', 'rev', 'source_rev'), ()),
     }.get(action)
     if shape is None:
         raise DomainError('INVALID_ACTION', 'unsupported job operation')
@@ -737,8 +762,23 @@ def _job(store, action, payload):
             data['run'] = {k: run[k] for k in ('run_id', 'job_id', 'rev', 'target', 'status', 'error', 'artifact_id')}
         return data
     rev = _revision(payload['rev'])
+    if action == 'unlock':
+        scope = payload['scope']
+        command = f'UMP UNLOCK {job} {rev} {scope}'
+        if not _claimed_command(command, job, rev):
+            raise DomainError('UNLOCK_AUTHORIZATION_REQUIRED', 'a matching explicit unlock command is required')
+        key = _event_key()
+        evidence = {
+            'job_id': job, 'rev': rev, 'scope': scope,
+            'message_id': key[3], 'chat_id': key[1],
+        }
+        return store.unlock_scope(job, rev, scope, evidence=evidence)
     if rev != current['rev']:
         raise DomainError('STALE_REVISION', f"expected {current['rev']}")
+    if action == 'lock':
+        return store.lock_scope(job, rev, payload['scope'])
+    if action == 'rollback':
+        return store.rollback(job, rev, _revision(payload['source_rev']))
     if action == 'import_audio':
         track_id, kind = payload['track_id'], payload['kind']
         if (not isinstance(track_id, str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,47}', track_id)
@@ -885,6 +925,8 @@ _job_payload_schema = {
         'job_id': _identifier_type,
         'run_id': _identifier_type,
         'rev': {'type': 'integer', 'minimum': 1, 'maximum': 999999999},
+        'source_rev': {'type': 'integer', 'minimum': 1, 'maximum': 999999999},
+        'scope': {'type': 'string', 'pattern': '^[a-z][a-z0-9_.-]{0,127}$'},
         'mode': {'type': 'string', 'enum': ['autonomous', 'collaborative', 'directed']},
         'requirements': {'type': 'object'},
         'value': COMPOSITION_SCHEMA,
@@ -934,7 +976,7 @@ SCHEMAS = {
         },
     },
     'ump_job': _schema('Create, read, revise, annotate or record explicit UMP approval. Load ump:motion-pipeline.', {
-        'action': {'type': 'string', 'enum': ['create', 'get', 'set_brief', 'research', 'write_naskah', 'import_naskah', 'select_style', 'revise', 'annotate', 'approve', 'write_composition', 'import_audio']},
+        'action': {'type': 'string', 'enum': ['create', 'get', 'set_brief', 'research', 'write_naskah', 'import_naskah', 'select_style', 'revise', 'annotate', 'approve', 'write_composition', 'import_audio', 'lock', 'unlock', 'rollback']},
         'payload': {**_job_payload_schema,
                     'description': 'create: brief [mode, requirements]; write_composition: job_id, rev, value with bounded HTML and pinned metadata; import_audio: job_id, rev, track_id, kind bound to the current Telegram audio caption. Never pass filesystem paths for a composition or audio track.'},
     }),

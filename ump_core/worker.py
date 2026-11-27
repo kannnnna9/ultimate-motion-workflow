@@ -635,11 +635,11 @@ def _align_voice_timeline(workspace, audio_path, transcript_path, *, audio_sha25
     raise DomainError('SPEECH_ALIGNMENT_FAILED', ';'.join(failures))
 
 
-def _write_custom_subtitle(workspace, timeline, voice_track):
+def _write_custom_subtitle(workspace, timeline, voice_track, style=None):
     from .subtitles import MOBILE_ASS_STYLE, render_subtitles
 
     subtitle_bytes = render_subtitles(
-        'ass', timeline, MOBILE_ASS_STYLE,
+        'ass', timeline, MOBILE_ASS_STYLE if style is None else style,
         audio_sha256=voice_track['sha256'], track_duration_ms=voice_track['duration_ms'],
         width=1080, height=1920,
     )
@@ -879,7 +879,9 @@ def _render_custom(store, run, directory, deadline):
             ).encode('utf-8') + bytes([10])
             speech_timeline_path = _write_private_bytes(workspace / 'speech_timeline.json', speech_timeline_bytes)
             if validated['subtitle_mode'] == 'ass':
-                subtitle_path, subtitle_bytes = _write_custom_subtitle(workspace, timeline, voice_record)
+                subtitle_path, subtitle_bytes = _write_custom_subtitle(
+                    workspace, timeline, voice_record, validated.get('ass_style'),
+                )
             elif validated['subtitle_mode'] == 'web':
                 karaoke_path, karaoke_bytes = _write_custom_karaoke(workspace, timeline, voice_record)
 

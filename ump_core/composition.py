@@ -67,6 +67,24 @@ COMPOSITION_SCHEMA = {
         "subtitles_enabled": {"type": "boolean"},
         "subtitle_mode": {"type": "string", "enum": ["none", "ass", "web"]},
         "subtitle_effect": {"type": ["string", "null"], "enum": ["karaoke", None]},
+        "ass_style": {
+            "type": "object",
+            "properties": {
+                "font_name": {"type": "string", "maxLength": 64},
+                "font_size": {"type": "integer", "minimum": 18, "maximum": 112},
+                "bold": {"type": "boolean"},
+                "outline": {"type": "number", "minimum": 0, "maximum": 8},
+                "shadow": {"type": "number", "minimum": 0, "maximum": 8},
+                "margin_l": {"type": "integer", "minimum": 0, "maximum": 1080},
+                "margin_r": {"type": "integer", "minimum": 0, "maximum": 1080},
+                "margin_v": {"type": "integer", "minimum": 0, "maximum": 1920},
+                "max_words_per_cue": {"type": "integer", "minimum": 1, "maximum": 8},
+                "anchor": {"type": "string", "const": "bottom-center"},
+            },
+            "required": ["font_name", "font_size", "bold", "outline", "shadow", "margin_l",
+                         "margin_r", "margin_v", "max_words_per_cue", "anchor"],
+            "additionalProperties": False,
+        },
         "draws_speech_text": {"type": "boolean"},
         "speech_anchors": {
             "type": "array",
@@ -197,7 +215,7 @@ def validate_speech_anchor_specs(value: object) -> list[dict]:
 def validate_composition(value: object) -> dict:
     if (not isinstance(value, dict) or not _COMPOSITION_FIELDS <= value.keys()
             or value.keys() - (_COMPOSITION_FIELDS | {
-                "assets", "audio_tracks", "subtitle_mode", "subtitle_effect",
+                "assets", "audio_tracks", "subtitle_mode", "subtitle_effect", "ass_style",
                 "draws_speech_text", "speech_anchors",
             })):
         raise DomainError("INVALID_COMPOSITION", "expected only HTML and pinned composition metadata")
@@ -250,6 +268,16 @@ def validate_composition(value: object) -> dict:
             raise DomainError("INVALID_COMPOSITION", "web subtitle_mode requires subtitle_effect=karaoke")
     elif subtitle_effect is not None:
         raise DomainError("INVALID_COMPOSITION", "subtitle_effect is only valid with web subtitle_mode")
+    ass_style = None
+    if "ass_style" in value:
+        if subtitle_mode != "ass":
+            raise DomainError("INVALID_COMPOSITION", "ass_style is only valid with ASS subtitles")
+        from .subtitles import _validate_style
+
+        try:
+            ass_style = _validate_style(value["ass_style"], width=1080, height=1920)
+        except ValueError as exc:
+            raise DomainError("INVALID_ASS_STYLE", str(exc)) from exc
     video_duration_ms = frames * 1000 // 30
     raw_audio_tracks = value.get("audio_tracks", [])
     if not audio_enabled:
@@ -294,6 +322,8 @@ def validate_composition(value: object) -> dict:
     )}
     result["subtitle_mode"] = subtitle_mode
     result["subtitle_effect"] = subtitle_effect
+    if ass_style is not None:
+        result["ass_style"] = ass_style
     result["draws_speech_text"] = draws_speech_text
     result["speech_anchors"] = speech_anchors
     if asset_refs:

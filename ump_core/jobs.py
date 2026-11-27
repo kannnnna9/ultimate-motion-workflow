@@ -211,7 +211,19 @@ class JobStore:
             CREATE TABLE IF NOT EXISTS approvals (
                 job_id TEXT NOT NULL, rev INTEGER NOT NULL, stage TEXT NOT NULL,
                 artifact_id TEXT NOT NULL, message_id TEXT, chat_id TEXT,
+                artifact_sha256 TEXT,
                 PRIMARY KEY(job_id, rev, stage)
+            );
+            CREATE TABLE IF NOT EXISTS revision_impacts (
+                job_id TEXT NOT NULL, rev INTEGER NOT NULL, impact TEXT NOT NULL,
+                PRIMARY KEY(job_id, rev),
+                FOREIGN KEY(job_id, rev) REFERENCES revisions(job_id, rev)
+            );
+            CREATE TABLE IF NOT EXISTS revision_locks (
+                job_id TEXT NOT NULL, lock_rev INTEGER NOT NULL, scope TEXT NOT NULL,
+                protected_sha256 TEXT NOT NULL,
+                PRIMARY KEY(job_id, scope),
+                FOREIGN KEY(job_id, lock_rev) REFERENCES revisions(job_id, rev)
             );
             CREATE TABLE IF NOT EXISTS notes (
                 id TEXT PRIMARY KEY, job_id TEXT NOT NULL, rev INTEGER NOT NULL,
@@ -226,7 +238,7 @@ class JobStore:
         self._migrate_stage()
         with self._db() as db:
             columns = {row["name"] for row in db.execute("PRAGMA table_info(approvals)")}
-            for name in ("message_id", "chat_id"):
+            for name in ("message_id", "chat_id", "artifact_sha256"):
                 if name not in columns:
                     db.execute(f"ALTER TABLE approvals ADD COLUMN {name} TEXT")
 
@@ -272,6 +284,124 @@ class JobStore:
             raise DomainError("NOT_FOUND", "path")
         return p
 
+    def _artifact_sha256(self, path: str | Path) -> str:
+        safe = self._safe(path)
+        fd = None
+        try:
+            fd = os.open(
+                safe, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+            )
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                    or before.st_nlink != 1 or before.st_mode & 0o002
+                    or before.st_size < 0 or before.st_size > 2 * 1024 * 1024 * 1024):
+                raise DomainError("INVALID_ARTIFACT", "approval requires a bounded owned regular file")
+            digest = hashlib.sha256()
+            total = 0
+            with os.fdopen(fd, "rb") as stream:
+                fd = None
+                while chunk := stream.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > 2 * 1024 * 1024 * 1024:
+                        raise DomainError("INVALID_ARTIFACT", "approval artifact exceeds its byte limit")
+                    digest.update(chunk)
+                after = os.fstat(stream.fileno())
+            if (total != before.st_size or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                    != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
+                raise DomainError("INVALID_ARTIFACT", "approval artifact changed while hashing")
+            return digest.hexdigest()
+        except DomainError:
+            raise
+        except OSError as exc:
+            raise DomainError("INVALID_ARTIFACT", "approval artifact is unavailable or unsafe") from exc
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    @staticmethod
+    def _record_impact(db, job_id: str, rev: int, decision: dict) -> None:
+        encoded = json.dumps(decision, sort_keys=True, allow_nan=False)
+        db.execute("INSERT INTO revision_impacts VALUES (?,?,?)", (job_id, rev, encoded))
+
+    @staticmethod
+    def _check_locks(db, job_id: str, candidate: dict) -> None:
+        from .revision import scope_hash
+
+        locks = db.execute(
+            "SELECT lock_rev, scope, protected_sha256 FROM revision_locks WHERE job_id=? ORDER BY scope",
+            (job_id,),
+        ).fetchall()
+        for lock in locks:
+            try:
+                digest = scope_hash(candidate, lock["scope"])
+            except DomainError as exc:
+                raise DomainError("LOCK_CONFLICT", f"{lock['scope']} is locked from revision {lock['lock_rev']}") from exc
+            if digest != lock["protected_sha256"]:
+                raise DomainError("LOCK_CONFLICT", f"{lock['scope']} is locked from revision {lock['lock_rev']}")
+
+    def _read_verified_custom_revision(self, job_id: str, source_rev: int, payload: dict):
+        from .composition import (
+            MAX_COMPOSITION_BYTES, MAX_PROJECT_BYTES, read_pinned_asset, read_pinned_audio,
+            validate_asset_manifest, validate_audio_manifest,
+        )
+
+        composition = payload.get("composition")
+        if not isinstance(composition, dict) or composition.get("html_path") != "composition/index.html" \
+                or composition.get("project_path") != "project.json":
+            raise DomainError("INVALID_SNAPSHOT", "historic composition paths are invalid")
+        source_revision = self._job_dir(job_id) / "revisions" / str(source_rev)
+        source_dir = source_revision / "composition"
+        html_raw = source_dir / "index.html"
+        project_raw = source_revision / "project.json"
+        if source_revision.is_symlink() or source_dir.is_symlink() or not source_dir.is_dir():
+            raise DomainError("INVALID_SNAPSHOT", "historic composition files are unavailable")
+        for raw_path in (html_raw, project_raw):
+            if self._safe(raw_path) != raw_path:
+                raise DomainError("INVALID_SNAPSHOT", "historic composition files are unavailable")
+        html_bytes = read_bounded_regular_file(html_raw, MAX_COMPOSITION_BYTES)
+        project_bytes = read_bounded_regular_file(project_raw, MAX_PROJECT_BYTES)
+        hashes = {
+            "html_sha256": hashlib.sha256(html_bytes).hexdigest(),
+            "project_sha256": hashlib.sha256(project_bytes).hexdigest(),
+        }
+        if any(composition.get(field) != digest for field, digest in hashes.items()):
+            raise DomainError("INVALID_SNAPSHOT", "historic composition hashes do not match its revision")
+        try:
+            metadata = json.loads(project_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise DomainError("INVALID_SNAPSHOT", "historic project metadata is malformed") from exc
+        if not isinstance(metadata, dict) or metadata != composition.get("metadata"):
+            raise DomainError("INVALID_SNAPSHOT", "historic project metadata differs from its revision")
+        asset_manifest = validate_asset_manifest(metadata.get("assets", []))
+        asset_blobs = [(record["path"], read_pinned_asset(source_dir, record)) for record in asset_manifest]
+        audio_manifest = metadata.get("audio_tracks", [])
+        if audio_manifest:
+            if metadata.get("audio_enabled") is not True:
+                raise DomainError("INVALID_SNAPSHOT", "historic audio manifest is disabled")
+            audio_manifest = validate_audio_manifest(
+                audio_manifest,
+                video_duration_ms=metadata["duration_frames"] * 1000 // metadata["fps"],
+            )
+            audio_blobs = [(record["path"], read_pinned_audio(source_dir, record)) for record in audio_manifest]
+        else:
+            if metadata.get("audio_enabled") is not False:
+                raise DomainError("INVALID_SNAPSHOT", "historic audio-enabled project has no pinned tracks")
+            audio_blobs = []
+        return html_bytes, project_bytes, [*asset_blobs, *audio_blobs]
+
+    @staticmethod
+    def _write_custom_revision(destination: Path, content) -> None:
+        html_bytes, project_bytes, blobs = content
+        copied_source = destination / "composition"
+        copied_source.mkdir(mode=0o700)
+        _write_private_file(copied_source / "index.html", html_bytes)
+        _write_private_file(destination / "project.json", project_bytes)
+        for relative_path, data in blobs:
+            target = copied_source / relative_path
+            target.parent.mkdir(mode=0o700, exist_ok=True)
+            _write_private_file(target, data)
+
     def create(self, brief: str, *, mode="collaborative", requirements=None) -> dict:
         if not isinstance(brief, str) or not brief.strip():
             raise DomainError("INVALID_PAYLOAD", "brief")
@@ -304,6 +434,7 @@ class JobStore:
             row = self._job(db, job_id)
             self._check_rev(row, rev)
             payload = json.loads(row["payload"])
+            original_payload = copy.deepcopy(payload)
             has_composition = isinstance(payload.get("composition"), dict)
             allowed = {"composition_draft", "preview", "final_ready"} if has_composition else {"intake", "naskah_approved"}
             if row["stage"] not in allowed:
@@ -424,6 +555,10 @@ class JobStore:
                 "metadata": metadata,
             }
             encoded = json.dumps(payload, sort_keys=True, allow_nan=False)
+            from .revision import impact as revision_impact
+
+            decision = revision_impact(original_payload, payload)
+            self._check_locks(db, job_id, payload)
             rev_dir = self._job_dir(row["job_id"]) / "revisions" / str(new_rev)
             rev_dir.mkdir(parents=True, mode=0o700)
             try:
@@ -445,6 +580,7 @@ class JobStore:
                 _write_private_file(rev_dir / "project.json", project_bytes)
                 _write_private_file(rev_dir / "input.json", encoded.encode("utf-8"))
                 db.execute("INSERT INTO revisions VALUES (?,?,?)", (job_id, new_rev, encoded))
+                self._record_impact(db, job_id, new_rev, decision)
                 seq = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM stage_history WHERE job_id=?",
                                  (job_id,)).fetchone()[0]
                 db.execute("INSERT INTO stage_history VALUES (?,?,?,?,?,?,?)",
@@ -486,6 +622,10 @@ class JobStore:
                 encoded = json.dumps(payload, sort_keys=True, allow_nan=False)
             except (TypeError, ValueError) as exc:
                 raise DomainError("INVALID_PAYLOAD", "revision must be JSON") from exc
+            from .revision import impact as revision_impact
+
+            decision = revision_impact(original_payload, payload)
+            self._check_locks(db, job_id, payload)
             new_rev = rev + 1
             custom = isinstance(original_payload.get("composition"), dict)
             rollback = "composition_draft" if custom else None
@@ -566,10 +706,118 @@ class JobStore:
                 encoded = json.dumps(payload, sort_keys=True, allow_nan=False)
                 _write_private_file(rev_dir / "input.json", encoded.encode("utf-8"))
                 db.execute("INSERT INTO revisions VALUES (?,?,?)", (job_id, new_rev, encoded))
+                self._record_impact(db, job_id, new_rev, decision)
                 if rollback is None:
                     rollback = row["stage"]
                 db.execute("UPDATE jobs SET rev=?, payload=?, stage=?, status='draft', error=NULL WHERE job_id=?",
                            (new_rev, encoded, rollback, job_id))
+                db.commit()
+            except Exception:
+                shutil.rmtree(rev_dir, ignore_errors=True)
+                raise
+        return self.get(job_id)
+
+    def lock_scope(self, job_id: str, rev: int, scope: str) -> dict:
+        from .revision import scope_hash
+
+        with self._lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._job(db, job_id)
+            self._check_rev(row, rev)
+            snapshot = json.loads(row["payload"])
+            protected_sha256 = scope_hash(snapshot, scope)
+            existing = db.execute(
+                "SELECT lock_rev, protected_sha256 FROM revision_locks WHERE job_id=? AND scope=?",
+                (job_id, scope),
+            ).fetchone()
+            if existing is not None:
+                if existing["lock_rev"] != rev or existing["protected_sha256"] != protected_sha256:
+                    raise DomainError("LOCK_EXISTS", f"{scope} is already locked")
+            else:
+                db.execute(
+                    "INSERT INTO revision_locks(job_id, lock_rev, scope, protected_sha256) VALUES (?,?,?,?)",
+                    (job_id, rev, scope, protected_sha256),
+                )
+            db.commit()
+        return {"job_id": job_id, "rev": rev, "scope": scope, "protected_sha256": protected_sha256}
+
+    def unlock_scope(self, job_id: str, rev: int, scope: str, *, evidence=None) -> dict:
+        if not isinstance(evidence, dict) or evidence.get("job_id") != job_id \
+                or evidence.get("rev") != rev or evidence.get("scope") != scope \
+                or not evidence.get("message_id") or not evidence.get("chat_id"):
+            raise DomainError("UNLOCK_AUTHORIZATION_REQUIRED", "unlock must authorize this job, revision, and scope")
+        with self._lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            lock = db.execute(
+                "SELECT lock_rev, scope, protected_sha256 FROM revision_locks WHERE job_id=? AND scope=?",
+                (job_id, scope),
+            ).fetchone()
+            if lock is None:
+                raise DomainError("LOCK_NOT_FOUND", scope)
+            if lock["lock_rev"] != rev:
+                raise DomainError("UNLOCK_AUTHORIZATION_REQUIRED", "unlock must name the locking revision")
+            db.execute("DELETE FROM revision_locks WHERE job_id=? AND scope=?", (job_id, scope))
+            db.commit()
+        return {"job_id": job_id, "rev": rev, "scope": scope, "unlocked": True}
+
+    def rollback(self, job_id: str, rev: int, source_rev: int) -> dict:
+        if type(source_rev) is not int or source_rev <= 0:
+            raise DomainError("INVALID_REVISION", "source_rev must be a positive revision")
+        with self._lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._job(db, job_id)
+            self._check_rev(row, rev)
+            if source_rev >= rev:
+                raise DomainError("INVALID_ROLLBACK", "source_rev must be historic")
+            historic = db.execute(
+                "SELECT payload FROM revisions WHERE job_id=? AND rev=?", (job_id, source_rev),
+            ).fetchone()
+            if historic is None:
+                raise DomainError("NOT_FOUND", "source revision")
+            try:
+                payload = json.loads(historic["payload"])
+            except (TypeError, ValueError) as exc:
+                raise DomainError("INVALID_SNAPSHOT", "historic database revision is malformed") from exc
+            if not isinstance(payload, dict):
+                raise DomainError("INVALID_SNAPSHOT", "historic database revision is not an object")
+            from .composition import MAX_REVISION_BYTES
+
+            source_snapshot = self._job_dir(job_id) / "revisions" / str(source_rev) / "input.json"
+            source_snapshot_bytes = read_bounded_regular_file(source_snapshot, MAX_REVISION_BYTES)
+            try:
+                snapshot_payload = json.loads(source_snapshot_bytes)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise DomainError("INVALID_SNAPSHOT", "historic input snapshot is malformed") from exc
+            if snapshot_payload != payload:
+                raise DomainError("INVALID_SNAPSHOT", "historic input snapshot differs from the database revision")
+            self._check_locks(db, job_id, payload)
+            custom_content = None
+            custom = isinstance(payload.get("composition"), dict)
+            if custom:
+                custom_content = self._read_verified_custom_revision(job_id, source_rev, payload)
+            new_rev = rev + 1
+            rev_dir = self._job_dir(job_id) / "revisions" / str(new_rev)
+            rev_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
+            try:
+                if custom_content is not None:
+                    self._write_custom_revision(rev_dir, custom_content)
+                encoded = json.dumps(payload, sort_keys=True, allow_nan=False)
+                _write_private_file(rev_dir / "input.json", encoded.encode("utf-8"))
+                db.execute("INSERT INTO revisions VALUES (?,?,?)", (job_id, new_rev, encoded))
+                from .revision import impact as revision_impact
+
+                decision = revision_impact(json.loads(row["payload"]), payload)
+                self._record_impact(db, job_id, new_rev, decision)
+                target_stage = "composition_draft" if custom else ("brief_draft" if payload.get("brief") else "intake")
+                seq = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM stage_history WHERE job_id=?", (job_id,)).fetchone()[0]
+                db.execute(
+                    "INSERT INTO stage_history VALUES (?,?,?,?,?,?,?)",
+                    (job_id, new_rev, seq, "rollback", row["stage"], target_stage, f"from revision {source_rev}"),
+                )
+                db.execute(
+                    "UPDATE jobs SET rev=?, payload=?, stage=?, status='draft', error=NULL WHERE job_id=?",
+                    (new_rev, encoded, target_stage, job_id),
+                )
                 db.commit()
             except Exception:
                 shutil.rmtree(rev_dir, ignore_errors=True)
@@ -632,23 +880,31 @@ class JobStore:
     def approve(self, job_id, rev, stage, artifact_id, *, evidence=None):
         if not isinstance(evidence, dict) or not evidence.get("message_id") or not evidence.get("chat_id"):
             raise DomainError("APPROVAL_EVIDENCE_REQUIRED", "inbound message evidence")
-        with self._db() as db:
+        with self._lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
             row = self._job(db, job_id); self._check_rev(row, rev)
             art = db.execute("SELECT * FROM artifacts WHERE id=? AND job_id=? AND rev=?", (artifact_id, job_id, rev)).fetchone()
             if not art or not self._safe(art["path"]).is_file():
                 raise DomainError("INVALID_ARTIFACT", "artifact binding")
+            artifact_sha256 = self._artifact_sha256(art["path"])
             expected = STAGE_KIND.get(stage)
             if not expected or art["kind"] != expected:
                 raise DomainError("INVALID_APPROVAL", stage)
             required = APPROVAL_PREVIOUS_STAGE.get(stage)
             if required is None or row["stage"] != required:
                 raise DomainError("APPROVAL_STAGE", f"{stage} requires {required} (at {row['stage']})")
-            db.execute("INSERT OR REPLACE INTO approvals VALUES (?,?,?,?,?,?)", (job_id, rev, stage, artifact_id, evidence["message_id"], evidence["chat_id"]))
+            db.execute(
+                "INSERT OR REPLACE INTO approvals "
+                "(job_id, rev, stage, artifact_id, message_id, chat_id, artifact_sha256) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (job_id, rev, stage, artifact_id, evidence["message_id"], evidence["chat_id"], artifact_sha256),
+            )
             target = STAGE_NEXT.get(stage)
             if target is not None:
                 seq = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM stage_history WHERE job_id=?", (job_id,)).fetchone()[0]
                 db.execute("INSERT INTO stage_history VALUES (?,?,?,?,?,?,?)", (job_id, rev, seq, f"approve_{stage}", row["stage"], target, None))
                 db.execute("UPDATE jobs SET stage=? WHERE job_id=?", (target, job_id))
+            db.commit()
         return {"job_id": job_id, "rev": rev, "stage": stage, "artifact_id": artifact_id,
                 "job_stage": self.stage_of(job_id)}
 
@@ -682,6 +938,7 @@ class JobStore:
             row = self._job(db, job_id); self._check_rev(row, rev)
             required = TARGET_STAGE[target]
             payload = json.loads(row["payload"])
+            self._check_locks(db, job_id, payload)
             custom = isinstance(payload.get("composition"), dict)
             if custom and target == "preview":
                 required = "composition_draft"
@@ -710,12 +967,14 @@ class JobStore:
 
     def _approved(self, db, job_id, rev, stage):
         kind = {"script_style": "style_frame", "preview": "preview"}[stage]
-        art = db.execute("""SELECT a.path FROM approvals p JOIN artifacts a
+        art = db.execute("""SELECT a.path, p.artifact_sha256 FROM approvals p JOIN artifacts a
             ON a.id=p.artifact_id AND a.job_id=p.job_id AND a.rev=p.rev
             WHERE p.job_id=? AND p.rev=? AND p.stage=? AND a.kind=?""",
             (job_id, rev, stage, kind)).fetchone()
+        if art is None or not isinstance(art["artifact_sha256"], str):
+            return False
         try:
-            return art is not None and self._safe(art["path"]).is_file()
+            return self._artifact_sha256(art["path"]) == art["artifact_sha256"]
         except (DomainError, OSError, RuntimeError):
             return False
 
@@ -830,6 +1089,22 @@ class JobStore:
         if not isinstance(payload, dict):
             raise DomainError("INVALID_SNAPSHOT", "database revision payload is not an object")
         return payload
+
+    def get_revision_impact(self, job_id: str, rev: int) -> dict | None:
+        with self._db() as db:
+            self._job(db, job_id)
+            row = db.execute(
+                "SELECT impact FROM revision_impacts WHERE job_id=? AND rev=?", (job_id, rev),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            value = json.loads(row["impact"])
+        except (TypeError, ValueError) as exc:
+            raise DomainError("INVALID_SNAPSHOT", "revision impact manifest is malformed") from exc
+        if not isinstance(value, dict):
+            raise DomainError("INVALID_SNAPSHOT", "revision impact manifest is not an object")
+        return value
 
     def get_run(self, run_id):
         with self._db() as db:
