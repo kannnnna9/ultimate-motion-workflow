@@ -20,7 +20,7 @@ import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import sandbox
+from . import resources, sandbox
 from .jobs import DomainError, JobStore, read_bounded_regular_file
 
 # Code and data live apart on purpose.
@@ -211,6 +211,37 @@ def _write_private_bytes(path, data):
     with os.fdopen(fd, 'wb') as stream:
         stream.write(data)
     return path
+
+
+def _write_resource_report(directory, report):
+    path = directory / 'resources.json'
+    temporary = directory / '.resources.json.tmp'
+    data = json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False).encode('utf-8') + b'\n'
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(temporary, flags, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+    os.chmod(path, 0o600)
+    return path
+
+
+def _disk_summary(sample):
+    return {
+        key: sample.get(key)
+        for key in ('root_path', 'root_free_bytes', 'data_root_path', 'data_root_used_bytes',
+                    'data_root_free_bytes', 'temp_path', 'temp_free_bytes')
+    }
+
+
+def _resource_backend(custom):
+    return {
+        'pipeline': 'custom_browser_streaming' if custom else 'legacy_hyperframes_or_frame_recorder',
+        'encoder': 'ffmpeg/libx264',
+        'browser': os.environ.get('HYPERFRAMES_BROWSER_PATH') or 'playwright_default',
+    }
 
 
 def _copy_regular_output(source, destination, *, workspace, max_bytes):
@@ -432,14 +463,22 @@ def _mux(directory, episode, brand, cues, asset_root, target, command):
     return output
 
 
-def _render(store, run, directory, command):
+def _render(store, run, directory, command, budget_check=None):
     from scripts.render import HYPERFRAMES_VERSION, probe
     snapshot, payload, episode, project, brand, cues = _stage(store, run, directory)
     hf = ['npx', '--yes', f'hyperframes@{HYPERFRAMES_VERSION}']
+    phase = ['legacy_setup']
+
+    def guarded_command(args, cwd=directory):
+        if budget_check is not None:
+            budget_check(phase[0])
+        command(args, cwd)
+
     def hyper(args):
-        command([*hf, *args], project)
+        guarded_command([*hf, *args], project)
     target = run['target']
     if target == 'style_frame':
+        phase[0] = 'legacy_capture'
         hyper(['snapshot', '--at', '1', '--no-end', '--keep', '--output', str(directory / 'snapshots')])
         images = list((directory / 'snapshots').rglob('*.png'))
         if len(images) != 1 or probe(images[0])['streams'][0]['codec_name'] != 'png':
@@ -451,6 +490,7 @@ def _render(store, run, directory, command):
     vo.parent.mkdir(parents=True)
     (episode / 'work').mkdir()
     imported = payload.get('voice_asset')
+    phase[0] = 'legacy_audio'
     if imported:
         if not isinstance(imported, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16}\.(mp3|ogg|wav|m4a|opus|aac|flac|webm)', imported):
             raise DomainError('INVALID_ATTACHMENT', 'invalid workspace audio ID')
@@ -458,8 +498,8 @@ def _render(store, run, directory, command):
         if not source.is_file():
             raise DomainError('AUDIO_REQUIRED', 'imported recording unavailable')
         demuxer = {'m4a': 'mov', 'opus': 'ogg'}.get(source.suffix[1:], source.suffix[1:])
-        command(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-protocol_whitelist', 'file,pipe',
-                 '-f', demuxer, '-i', str(source), '-map', '0:a:0', '-t', '181', '-codec:a', 'libmp3lame', str(vo)])
+        guarded_command(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-protocol_whitelist', 'file,pipe',
+                         '-f', demuxer, '-i', str(source), '-map', '0:a:0', '-t', '181', '-codec:a', 'libmp3lame', str(vo)])
     elif fixture in FIXTURES:
         shutil.copyfile(_local_asset(asset_root, 'vo.mp3'), vo)
     words = payload.get('voice_words')
@@ -467,15 +507,17 @@ def _render(store, run, directory, command):
         _write(episode / 'work/captions.json', {'words': words})
     elif fixture in FIXTURES and not imported:
         shutil.copyfile(owned(asset_root, FIXTURES[fixture]), episode / 'work/captions.json')
-    captions = prepare_audio(episode, command)
+    captions = prepare_audio(episode, guarded_command)
     seconds = float(probe(vo)['format']['duration'])
     if not 0 < seconds <= 180 or max(w['end_ms'] for w in captions['words']) > (seconds + .35) * 1000:
         raise DomainError('INVALID_AUDIO_TIMING', 'word timings exceed recording duration')
+    phase[0] = 'legacy_capture'
     if _records_own_frames(brand):
-        _record_frames(directory, project, command)
+        _record_frames(directory, project, guarded_command)
     else:
         hyper(['render', '--quality', 'draft' if target == 'preview' else 'delivery', '--workers', '1', '-o', str(directory / 'frames.mp4')])
-    return _mux(directory, episode, brand, cues, asset_root, target, command)
+    phase[0] = 'legacy_mux'
+    return _mux(directory, episode, brand, cues, asset_root, target, guarded_command)
 
 
 def _drain_bounded(stream, buffer, limit=16 * 1024):
@@ -709,7 +751,7 @@ def _validate_custom_video(path, metadata, deadline, *, audio_enabled=False):
         raise DomainError('INVALID_ARTIFACT', decoded.stderr.strip()[-800:] or 'custom MP4 did not fully decode')
 
 
-def _render_custom(store, run, directory, deadline):
+def _render_custom(store, run, directory, deadline, budget_check=None):
     from .audio import resolve_speech_anchors
     from .composition import (
         MAX_COMPOSITION_BYTES, MAX_PROJECT_BYTES, MAX_REVISION_BYTES,
@@ -808,6 +850,8 @@ def _render_custom(store, run, directory, deadline):
             raise DomainError('TRANSCRIPT_REQUIRED', 'approved naskah has no usable narration') from exc
 
 
+    if budget_check is not None:
+        budget_check('custom_workspace')
     workspace = sandbox.create_workspace('c' + uuid.uuid4().hex[:15])
     ffmpeg_process = node_process = mux_process = None
     ffmpeg_unit = node_unit = mux_unit = None
@@ -854,6 +898,8 @@ def _render_custom(store, run, directory, deadline):
             naskah_bytes = json.dumps(payload['naskah'], ensure_ascii=False, sort_keys=True,
                                       separators=(',', ':'), allow_nan=False).encode('utf-8')
             naskah_path = _write_private_bytes(workspace / 'naskah.json', naskah_bytes)
+            if budget_check is not None:
+                budget_check('custom_asr')
             timeline = _align_voice_timeline(
                 workspace, audio_path_by_track[voice_record['track_id']], naskah_path,
                 audio_sha256=voice_record['sha256'], duration_ms=voice_record['duration_ms'],
@@ -885,6 +931,8 @@ def _render_custom(store, run, directory, deadline):
             elif validated['subtitle_mode'] == 'web':
                 karaoke_path, karaoke_bytes = _write_custom_karaoke(workspace, timeline, voice_record)
 
+        if budget_check is not None:
+            budget_check('custom_capture')
         work_video = workspace / 'preview.partial.mp4'
         ffmpeg_argv = [
             'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
@@ -954,6 +1002,8 @@ def _render_custom(store, run, directory, deadline):
 
         final_workspace_video = work_video
         if metadata['audio_enabled']:
+            if budget_check is not None:
+                budget_check('custom_mux')
             muxed_video = workspace / 'muxed.partial.mp4'
             mux_argv = _build_custom_mux_argv(
                 work_video,
@@ -987,9 +1037,13 @@ def _render_custom(store, run, directory, deadline):
                 raise DomainError('RENDER_FAILED', f'FFmpeg mux exit {mux_status}: {detail}')
             final_workspace_video = muxed_video
 
+        if budget_check is not None:
+            budget_check('custom_publish')
         partial = directory / f'{target}.partial.mp4'
         _copy_regular_output(final_workspace_video, partial, workspace=workspace, max_bytes=512 * 1024 * 1024)
         _validate_custom_video(partial, validated, deadline, audio_enabled=metadata['audio_enabled'])
+        if budget_check is not None:
+            budget_check('custom_source_bundle')
         source_zip = directory / 'source.zip'
         bundle_files = {'index.html': html_bytes, 'project.json': project_bytes}
         bundle_files.update({record['path']: data for record, data in asset_blobs})
@@ -1041,6 +1095,8 @@ def _render_custom(store, run, directory, deadline):
                 max_bytes=4 * 1024 * 1024,
             )
             additional_artifacts['subtitles'] = 'subtitles.json'
+        if budget_check is not None:
+            budget_check('custom_ready')
         return partial, additional_artifacts
     finally:
         if ffmpeg_process is not None and ffmpeg_process.stdin is not None:
@@ -1185,6 +1241,42 @@ def _document(store, run, directory):
     return output
 
 
+def _run_budget_check(store, directory, workload, projection, report, phase, started_monotonic):
+    phase_projection = projection['phases'].get(phase, projection['phases']['initial'])
+    try:
+        sample = resources.probe_resources(
+            data_root=store.root, root=Path('/'), temp_root=sandbox.SHM_ROOT,
+        )
+    except (OSError, ValueError) as exc:
+        sample = {
+            'root_free_bytes': None,
+            'data_root_used_bytes': None,
+            'data_root_free_bytes': None,
+            'temp_free_bytes': None,
+            'projected_temp_bytes': phase_projection['temporary_bytes'],
+            'probe_error': str(exc)[:300],
+        }
+    sample['projected_temp_bytes'] = phase_projection['temporary_bytes']
+    budget = resources.check_budget(sample, phase_projection['data_root_bytes'], workload)
+    check = {'phase': phase, 'sample': sample, 'budget': budget}
+    report['budget_checks'].append(check)
+    report['latest_probe'] = sample
+    report['budget'] = budget
+    if report['disk_before'] is None:
+        report['disk_before'] = _disk_summary(sample)
+    report['wall_time_seconds'] = round(time.monotonic() - started_monotonic, 6)
+    report['peak_memory_bytes'] = resources.worker_peak_memory_bytes()
+    _write_resource_report(directory, report)
+    if budget['decision'] != 'allow':
+        reasons = ','.join(budget['reasons']) or 'unspecified'
+        if budget['decision'] == 'warn':
+            message = f'long render paused for inventory at soft DATA_ROOT threshold: {reasons}'
+        else:
+            message = f'resource budget stopped render before next allocation: {reasons}'
+        raise DomainError('RESOURCE_BUDGET', message)
+    return sample
+
+
 def execute_run(store: JobStore, run_id: str, argv=None):
     directory = _run_dir(store, run_id)
     with _lease(directory) as acquired:
@@ -1192,8 +1284,12 @@ def execute_run(store: JobStore, run_id: str, argv=None):
             return store.get_run(run_id)
         (directory / 'started').touch()
         deadline = time.monotonic() + RUN_TIMEOUT
+        render_started = time.monotonic()
+        resource_report = None
+
         def command(args, cwd=directory):
             _command(args, cwd, deadline)
+
         try:
             run = store.get_run(run_id)
             if run['status'] != 'running':
@@ -1207,19 +1303,93 @@ def execute_run(store: JobStore, run_id: str, argv=None):
             else:
                 with sandbox.render_lease():
                     payload = store.get_revision_payload(run['job_id'], run['rev'])
-                    if isinstance(payload.get('composition'), dict):
-                        output, additional_artifacts = _render_custom(store, run, directory, deadline)
+                    custom = isinstance(payload.get('composition'), dict)
+                    composition = payload.get('composition') if custom else {}
+                    metadata = composition.get('metadata', {}) if isinstance(composition, dict) else {}
+                    audio_enabled = isinstance(metadata, dict) and metadata.get('audio_enabled') is True
+                    workload = 'custom_render' if custom else 'legacy_render'
+                    projection = resources.estimate_render_projection(workload, audio_enabled=audio_enabled)
+                    resource_report = {
+                        'schema_version': 1,
+                        'status': 'running',
+                        'workload': workload,
+                        'backend': _resource_backend(custom),
+                        'projection': projection,
+                        'budget_checks': [],
+                        'budget': None,
+                        'disk_before': None,
+                        'disk_after': None,
+                        'wall_time_seconds': 0.0,
+                        'peak_memory_bytes': resources.worker_peak_memory_bytes(),
+                        'peak_memory_scope': 'worker_process_only',
+                        'child_unit_peak_memory_measured': False,
+                        'cleanup_reason': None,
+                        'failure_reason': None,
+                    }
+
+                    def budget_check(phase='initial'):
+                        return _run_budget_check(
+                            store, directory, workload, projection, resource_report, phase, render_started,
+                        )
+
+                    budget_check('initial')
+                    if custom:
+                        output, additional_artifacts = _render_custom(
+                            store, run, directory, deadline, budget_check=budget_check,
+                        )
                     else:
-                        output = _render(store, run, directory, command)
+                        output = _render(store, run, directory, command, budget_check=budget_check)
+                        budget_check('legacy_ready')
             result = directory / MEDIA[run['target']]
             output.replace(result)
+            if resource_report is not None:
+                resource_report['status'] = 'finished'
+                resource_report['wall_time_seconds'] = round(time.monotonic() - render_started, 6)
+                resource_report['peak_memory_bytes'] = resources.worker_peak_memory_bytes()
+                resource_report['cleanup_reason'] = (
+                    'custom temporary workspace removed by renderer cleanup'
+                    if resource_report['workload'].startswith('custom')
+                    else 'legacy intermediate files remain private in the run directory'
+                )
+                try:
+                    final_sample = resources.probe_resources(
+                        data_root=store.root, root=Path('/'), temp_root=sandbox.SHM_ROOT,
+                    )
+                    resource_report['disk_after'] = _disk_summary(final_sample)
+                    resource_report['latest_probe'] = final_sample
+                except (OSError, ValueError) as exc:
+                    resource_report['disk_after_error'] = str(exc)[:300]
+                _write_resource_report(directory, resource_report)
             return store.finish(run_id, result.name, None, additional_artifacts=additional_artifacts)
-        except (Exception, SystemExit) as exc:
+        except (Exception, SystemExit, KeyboardInterrupt) as exc:
             error = str(exc).replace(str(directory), '<run>').replace('\n', ' ')[:500]
             # Keep the diagnostic log; staged copies and partial media are never published.
+            removed = []
             for name in ('frames.mp4', 'partial.mp4', 'preview.partial.mp4', 'final.partial.mp4',
                          'source.zip', 'web-preview.html', 'speech_timeline.json', 'subtitles.ass', *MEDIA.values(), *DOCS.values()):
-                (directory / name).unlink(missing_ok=True)
+                path = directory / name
+                if path.exists() or path.is_symlink():
+                    path.unlink(missing_ok=True)
+                    removed.append(name)
+            if resource_report is not None:
+                resource_report['status'] = 'failed'
+                resource_report['failure_reason'] = error or type(exc).__name__
+                resource_report['cleanup_reason'] = 'unpublished outputs removed; private resource report retained'
+                resource_report['cleanup_removed'] = removed
+                resource_report['wall_time_seconds'] = round(time.monotonic() - render_started, 6)
+                resource_report['peak_memory_bytes'] = resources.worker_peak_memory_bytes()
+                try:
+                    final_sample = resources.probe_resources(
+                        data_root=store.root, root=Path('/'), temp_root=sandbox.SHM_ROOT,
+                    )
+                    resource_report['disk_after'] = _disk_summary(final_sample)
+                    resource_report['latest_probe'] = final_sample
+                except (OSError, ValueError) as probe_exc:
+                    resource_report['disk_after_error'] = str(probe_exc)[:300]
+                try:
+                    _write_resource_report(directory, resource_report)
+                except OSError:
+                    pass
             return _fail_if_running(store, run_id, error or type(exc).__name__)
 
 
