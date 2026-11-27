@@ -5,12 +5,18 @@ import math
 import re
 import subprocess
 from bisect import bisect_right
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
+
+from .reference import _probe as _reference_probe
 
 
 class QualityError(ValueError):
     pass
+
+
+MAX_IN_ACTION_SAMPLES = 24
 
 
 def _run(args: list[str]) -> str:
@@ -38,24 +44,18 @@ def _rotation(stream: dict[str, Any]) -> int:
     return 0
 
 
-def _probe(video: Path) -> tuple[list[float], int, int, int]:
+def _probe(video: Path) -> tuple[list[Decimal], Decimal, int, int, int]:
+    pts_ms, duration_ms = _reference_probe(video)
     doc = json.loads(_run([
-        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_frames", "-show_streams",
+        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_streams",
         "-of", "json", str(video),
     ]))
     stream = doc["streams"][0]
-    frames = doc["frames"]
-    raw_pts = [float(frame["best_effort_timestamp_time"]) for frame in frames]
-    if not raw_pts or any(not math.isfinite(value) for value in raw_pts):
-        raise QualityError("video has no usable presentation timestamps")
-    if raw_pts != sorted(raw_pts):
-        raise QualityError("presentation timestamps are out of order")
-    pts_ms = [(value - raw_pts[0]) * 1000 for value in raw_pts]
     width, height = int(stream["width"]), int(stream["height"])
     rotation = _rotation(stream)
     if rotation in (90, 270):
         width, height = height, width
-    return pts_ms, width, height, rotation
+    return pts_ms, duration_ms, width, height, rotation
 
 
 def _sample_targets(action: dict[str, Any]) -> list[tuple[str, float]]:
@@ -71,13 +71,25 @@ def _sample_targets(action: dict[str, Any]) -> list[tuple[str, float]]:
         raise QualityError("action sample times must be finite non-negative milliseconds")
     if not before < start < end < after:
         raise QualityError("action samples must be ordered before < start < end < after")
-    return [
-        ("before", before),
-        ("during_start", start),
-        ("during_mid", (start + end) / 2),
-        ("during_end", end),
-        ("after", after),
-    ]
+    if "during_ms" not in action:
+        during = [("during_mid", (start + end) / 2)]
+    else:
+        requested = action["during_ms"]
+        if (not isinstance(requested, list)
+                or not 1 <= len(requested) <= MAX_IN_ACTION_SAMPLES
+                or any(isinstance(value, bool) for value in requested)):
+            raise QualityError("during_ms must contain 1–24 in-action sample times")
+        try:
+            during_times = [float(value) for value in requested]
+        except (TypeError, ValueError) as exc:
+            raise QualityError("during_ms must contain numeric sample times") from exc
+        if (any(not math.isfinite(value) or not start < value < end for value in during_times)
+                or during_times != sorted(set(during_times))):
+            raise QualityError("during_ms must be unique, ordered and inside the action")
+        during = [(f"during_{index}", value)
+                  for index, value in enumerate(during_times, start=1)]
+    return [("before", before), ("during_start", start), *during,
+            ("during_end", end), ("after", after)]
 
 
 def _roi(value: Any, name: str) -> tuple[int, int, int, int]:
@@ -182,27 +194,47 @@ def measure_motion(video_path: str | Path, calibration: dict[str, Any]) -> dict[
         video = Path(video_path)
         if not video.is_file():
             return _uncertain("video_not_found")
-        pts_ms, frame_width, frame_height, rotation_degrees = _probe(video)
+        pts_ms, duration_ms, frame_width, frame_height, rotation_degrees = _probe(video)
         targets = _sample_targets(calibration["action"])
         wing_roi = _roi(calibration["wing_roi"], "wing_roi")
         reference_roi = _roi(calibration["reference_roi"], "reference_roi")
         track = calibration["body_track"]
         if not isinstance(track, list) or not track:
             return _uncertain("body_track_missing")
+        if any(not isinstance(point, dict) for point in track):
+            return _uncertain("body_track_invalid")
         track = sorted(track, key=lambda point: float(point["time_ms"]))
-        if any(not math.isfinite(float(point["time_ms"])) for point in track):
+        track_times = [float(point["time_ms"]) for point in track]
+        track_confidences = [float(point.get("confidence", 1.0)) for point in track]
+        if (any(not math.isfinite(value) for value in track_times + track_confidences)
+                or any(not 0 <= confidence <= 1 for confidence in track_confidences)):
             return _uncertain("body_track_invalid")
 
         sample_tolerance = float(calibration.get("sample_tolerance_ms", 100))
         track_tolerance = float(calibration.get("track_tolerance_ms", 250))
-        if sample_tolerance < 0 or track_tolerance <= 0:
+        min_track_confidence = float(calibration.get("min_track_confidence", 0.5))
+        if (not all(math.isfinite(value) for value in
+                    (sample_tolerance, track_tolerance, min_track_confidence))
+                or sample_tolerance < 0 or track_tolerance <= 0
+                or not 0 <= min_track_confidence <= 1):
             return _uncertain("invalid_tolerance")
+        blank_limit = float(calibration.get("blank_frame_contrast", 1.0))
+        min_contrast = float(calibration.get("min_crop_contrast", 5.0))
+        if (not math.isfinite(blank_limit) or not math.isfinite(min_contrast)
+                or blank_limit < 0 or min_contrast <= 0):
+            return _uncertain("invalid_contrast_threshold")
         selected = []
         for label, target in targets:
-            frame_index = min(range(len(pts_ms)), key=lambda i: (abs(pts_ms[i] - target), pts_ms[i]))
-            actual_time = pts_ms[frame_index]
-            if abs(actual_time - target) > sample_tolerance:
+            requested_time = Decimal(str(target))
+            if requested_time < 0 or requested_time >= duration_ms:
                 return _uncertain("sample_time_unavailable")
+            frame_index = bisect_right(pts_ms, requested_time) - 1
+            if frame_index < 0:
+                return _uncertain("sample_time_unavailable")
+            actual_pts = pts_ms[frame_index]
+            if requested_time - actual_pts > Decimal(str(sample_tolerance)):
+                return _uncertain("sample_time_unavailable")
+            actual_time = float(actual_pts)
             selected.append({"label": label, "target_ms": target, "time_ms": actual_time,
                              "frame_index": frame_index})
         if len({sample["frame_index"] for sample in selected}) != len(selected):
@@ -211,7 +243,7 @@ def measure_motion(video_path: str | Path, calibration: dict[str, Any]) -> dict[
         poses = []
         for sample in selected:
             pose = _track_at(track, sample["time_ms"], track_tolerance)
-            if pose["confidence"] < float(calibration.get("min_track_confidence", 0.5)):
+            if pose["confidence"] < min_track_confidence:
                 return _uncertain("body_track_unreliable")
             sample["pose"] = pose
             poses.append(pose)
@@ -234,8 +266,6 @@ def measure_motion(video_path: str | Path, calibration: dict[str, Any]) -> dict[
         decoded = {index: raw.stdout[offset * frame_size:(offset + 1) * frame_size]
                    for offset, index in enumerate(indices)}
 
-        blank_limit = float(calibration.get("blank_frame_contrast", 1.0))
-        min_contrast = float(calibration.get("min_crop_contrast", 5.0))
         samples = []
         wing_crops = []
         reference_crops = []
@@ -272,17 +302,17 @@ def measure_motion(video_path: str | Path, calibration: dict[str, Any]) -> dict[
         if blank_detected:
             return _uncertain("blank_frame", blank_detected=True)
 
-        during_pairs = ((1, 2), (2, 3))
+        during_indices = [index for index, sample in enumerate(selected)
+                          if sample["label"].startswith("during_")]
+        during_pairs = tuple(zip(during_indices, during_indices[1:]))
         wing_diffs = [_difference(wing_crops[a], wing_crops[b]) for a, b in during_pairs]
         reference_diffs = [_difference(reference_crops[a], reference_crops[b])
                            for a, b in during_pairs]
         wing_motion = max(wing_diffs)
         reference_motion = max(reference_diffs)
         relative_motion = max(0.0, wing_motion - reference_motion * 1.5)
-        displacement = max(
-            math.dist(poses[a]["anchor"], poses[b]["anchor"])
-            for a, b in ((0, 1), (1, 2), (2, 3), (3, 4))
-        )
+        displacement = max(math.dist(poses[a]["anchor"], poses[b]["anchor"])
+                           for a, b in during_pairs)
         return {
             "source": "decoded_pixels",
             "reliable": True,
@@ -312,16 +342,20 @@ def assess_motion(intent: str, measurements: dict[str, Any], calibration: dict[s
             or not isinstance(measurements, dict)
             or measurements.get("source") != "decoded_pixels"
             or measurements.get("reliable") is not True
-            or measurements.get("blank_detected") is True):
+            or measurements.get("blank_detected") is True
+            or not isinstance(intent, str)):
         return "pending_review"
     try:
         motion = float(measurements["relative_motion"])
         movement_threshold = float(calibration.get("movement_threshold", 0.04))
         still_threshold = float(calibration.get("still_threshold", 0.025))
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, OverflowError):
         return "pending_review"
-    if not all(math.isfinite(value) and value >= 0
-               for value in (motion, movement_threshold, still_threshold)):
+    if (not all(math.isfinite(value) for value in
+                (motion, movement_threshold, still_threshold))
+            or not 0 <= motion <= 1
+            or not 0 < movement_threshold <= 1
+            or not 0 < still_threshold <= 1):
         return "pending_review"
 
     normalized = intent.strip().lower().replace("-", "_").replace(" ", "_")
@@ -340,11 +374,70 @@ def assess_motion(intent: str, measurements: dict[str, Any], calibration: dict[s
     return "pending_review"
 
 
+def _normalized_range(value: Any) -> tuple[float, float] | None:
+    if (not isinstance(value, (list, tuple)) or len(value) != 2
+            or any(not isinstance(item, (int, float)) or isinstance(item, bool)
+                   or not math.isfinite(item) for item in value)):
+        return None
+    start, end = (float(item) for item in value)
+    if start < 0 or end <= start:
+        return None
+    return start, end
+
+
+def _requires_playback(check: dict[str, Any]) -> bool:
+    criterion = check.get("criterion")
+    return (check.get("requires_playback") is True
+            or isinstance(criterion, str)
+            and criterion.strip().lower() in {"pacing", "timing", "rhythm"})
+
+
+def _playback_observation_matches(binding: dict[str, Any], check: dict[str, Any]) -> bool:
+    playback = check.get("playback_observation")
+    if not isinstance(playback, dict):
+        return False
+    criterion = check.get("criterion")
+    if (not isinstance(criterion, str) or not criterion.strip()
+            or not isinstance(playback.get("criterion"), str)
+            or playback["criterion"].strip().lower() != criterion.strip().lower()):
+        return False
+    expected_range = _normalized_range(check.get("range_ms"))
+    observed_range = _normalized_range(playback.get("range_ms"))
+    if expected_range is None or observed_range != expected_range:
+        return False
+    artifact_sha256 = playback.get("artifact_sha256")
+    if (not isinstance(artifact_sha256, str)
+            or artifact_sha256.lower() != binding["artifact_sha256"].lower()):
+        return False
+    reviewer = playback.get("reviewer")
+    observation = playback.get("observation")
+    if (not isinstance(reviewer, str) or not reviewer.strip()
+            or not isinstance(observation, str) or not observation.strip()):
+        return False
+    speed = playback.get("speed")
+    if (not isinstance(speed, (int, float)) or isinstance(speed, bool)
+            or not math.isfinite(speed) or speed != 1.0):
+        return False
+    if any(playback.get(key) is True
+           for key in ("automatic_completion", "auto_completed", "player_completion")):
+        return False
+    evidence_ref = playback.get("evidence_ref")
+    if not isinstance(evidence_ref, str) or not evidence_ref.strip():
+        return False
+    references = check.get("evidence_refs", check.get("evidence_ref"))
+    references = references if isinstance(references, list) else [references]
+    return evidence_ref in references
+
+
 def _category_status(checks: list[dict[str, Any]]) -> str:
-    statuses = [check.get("status") for check in checks]
+    if not checks:
+        return "pending_review"
+    statuses = [check.get("status") for check in checks if check.get("advisory") is not True]
+    if not statuses:
+        return "pass"
     if "fail" in statuses:
         return "fail"
-    if "pending_review" in statuses or not statuses:
+    if "pending_review" in statuses:
         return "pending_review"
     if all(status == "pass" for status in statuses):
         return "pass"
@@ -376,22 +469,13 @@ def build_review(binding: dict[str, Any], checks: list[dict[str, Any]],
 
     category_reviews = {}
     for category in categories:
-        status = _category_status(grouped[category])
         if category == "editorial":
-            requires_playback = any(
-                check.get("requires_playback") is True
-                or str(check.get("criterion", "")).lower() in {"pacing", "timing", "rhythm"}
-                for check in grouped[category]
-            )
-            playback_reviewed = any(
-                check.get("playback_reviewed") is True
-                or str(check.get("evidence_type", "")).lower() in {
-                    "normal_speed_playback", "video_playback", "playback"
-                }
-                for check in grouped[category]
-            )
-            if requires_playback and not playback_reviewed and status == "pass":
-                status = "pending_review"
+            for check in grouped[category]:
+                if (check.get("advisory") is not True and check["status"] == "pass"
+                        and _requires_playback(check)
+                        and not _playback_observation_matches(binding, check)):
+                    check["status"] = "pending_review"
+        status = _category_status(grouped[category])
         category_reviews[category] = {"status": status, "checks": grouped[category]}
 
     normalized_observations = []
