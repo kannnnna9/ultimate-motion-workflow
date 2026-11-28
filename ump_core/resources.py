@@ -7,12 +7,26 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from scripts.asr.preflight import (
-    DATA_ROOT_HARD_BYTES,
-    DATA_ROOT_SOFT_BYTES,
-    REPORT_RESERVE_BYTES,
-    ROOT_RESERVE_BYTES,
-)
+# The ASR preflight module lives beside the worker scripts, not on this
+# package's import path: keep the budget constants importable when the plugin is
+# imported from outside the code tree.
+try:  # pragma: no cover - exercised by the plugin capability probe
+    from scripts.asr.preflight import (
+        DATA_ROOT_HARD_BYTES,
+        DATA_ROOT_SOFT_BYTES,
+        REPORT_RESERVE_BYTES,
+        ROOT_RESERVE_BYTES,
+    )
+except ModuleNotFoundError:  # pragma: no cover
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.asr.preflight import (
+        DATA_ROOT_HARD_BYTES,
+        DATA_ROOT_SOFT_BYTES,
+        REPORT_RESERVE_BYTES,
+        ROOT_RESERVE_BYTES,
+    )
 
 from .composition import (
     MAX_COMPOSITION_BYTES,
