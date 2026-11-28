@@ -110,6 +110,12 @@ def inbound(event, gateway, **_):
     if getattr(raw, 'forward_origin', None) or getattr(raw, 'via_bot', None) or getattr(raw, 'is_automatic_forward', False):
         return
     text = event.text or ''
+    try:  # diagnostic: is the hook reached at all, and with what?
+        import os as _os, time as _time
+        with open(_os.path.expanduser('~/.hermes/ump/ump-hook.log'), 'a') as _fh:
+            _fh.write(f"{_time.time()} inbound text={text[:40]!r} mtype={event.message_type}\n")
+    except Exception:
+        pass
     approval, unlock, voice, audio_import = (
         _APPROVAL.fullmatch(text), _UNLOCK.fullmatch(text), _AUDIO.fullmatch(text), _AUDIO_IMPORT.fullmatch(text),
     )
