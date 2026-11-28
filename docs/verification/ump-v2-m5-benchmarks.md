@@ -82,6 +82,43 @@ Belum diverifikasi (jujur, tidak diklaim):
 7. Hold beku di explainer dan ad — diperbaiki seperti pada T3.
 8. opening/story terlalu mirip — ditambah speed line radial khusus opening.
 
+
+## Putaran 2 — umpan balik operator (2026-11-28)
+
+Operator menonton keempat MP4 pada 1× dan menyatakan visual sudah meningkat, dengan tiga cacat kecil: (1) matahari di opening muncul di antara dua gunung, (2) tokoh di cerita terlihat hanya punya satu tangan, (3) gagang cangkir di iklan "pindah pindah", plus (4) explainer terasa kurang tanpa VO penjelasan. Keempatnya diperbaiki lewat jalur `write_composition` + `ump_render` yang sama, bukan renderer baru.
+
+- **opening rev 4 / run `SUM6rvYcsJhppTTD`** — 600 f, 20.000 s, 8.821.171 B, SHA-256 `a979ed84358b21889746fb0d554b834c9a37e870d5b9a698927f999648fec2c5`. Matahari kini digambar **sebelum** lapisan bukit sehingga siluet punggungan yang menutupinya, dipusatkan di x=540, dan baru benar-benar bebas dari crest di akhir film — bukan lagi bola yang mengambang di lekuk antar-puncak. Tokoh mendapat lengan kedua: lengan dekat mengangkat, lengan jauh berayun tipis di sisi berlawanan.
+- **story rev 3 / run `k3qDtSOIDlRs-iKp`** — 1350 f, 45.000 s, 8.615.739 B, SHA-256 `05da2b109db89399349ab29f7b031052a2e4c9bef693ca678eb64039a4b6cb53`. Lengan kedua ditambahkan sebagai lengan terlipat dengan tangan beristirahat di tepi perahu, sehingga siluetnya asimetris dan tidak terbaca sebagai satu tangan yang terduplikasi. Percobaan pertama (lengan kedua diangkat simetris) ditolak karena terbaca seperti gestur ganda — dicatat sebagai iterasi gagal, bukan disembunyikan.
+- **ad rev 4 / run `d484qV8QZDF5O03C`** — 450 f, 15.000 s, 2.238.079 B, SHA-256 `9f1227d552152004355e20951fd00cec19e3c8df46ec147048354fec384764dc`. Gagang dibangun ulang sebagai loop 3D kontinu: titik tempel mengikuti `cos(rot)`, kedalaman loop mengikuti `sin(rot)`, dan sisi gambar (di depan vs di belakang badan) mengikuti tanda `hz`. Uji numerik 300 sampel 0–15 s: **0 lompatan tempel** > 55 px (sebelumnya melompat 621 px saat melewati 90°/270°), gagang tergambar di semua sampel, dan tampil di depan badan pada 60 % waktu rotasi — sesuai ekspektasi karena kamera lebih lama di setengah depan. Bukti visual 12 frame satu periode rotasi mengonfirmasi gagang berjalan kontinu tanpa teleport.
+- **explainer** — subtitle bahasa Indonesia bertiming ditambahkan ke komposisi (teks di dalam kanvas, jadi terbaca walau audio mati), dan VO bahasa Indonesia sungguhan diproduksi lokal dengan Piper (`id_ID-news_tts-medium`, 22.05 kHz mono). Enam kalimat VO diukur per baris (2.54/2.64/1.71/2.00/2.38/2.14 s) lalu disusun jadi satu bed 30.000 s dengan `loudnorm I=-16 TP=-1.5`. Hasil: `explainer_vo.mp4` 3.891.714 B, SHA-256 `e53dcf3489dbc3e72731bca33374fce7d5dadf7054c7ed828e2d1ac6e1779391`. Verifikasi: MD5 payload video **identik** dengan `preview.mp4` asli (`fed130cfa189caa54131ecf161a3624d`), audio hadir di keenam jendela bicara (RMS 2994–5807), senyap bersih di sela beat, dan peak 23918/32767 tanpa clipping.
+
+### Catatan kejujuran teknis
+
+- Jalan yang benar untuk audio di UMP adalah `import_audio`, tetapi aksi itu mensyaratkan lampiran audio Telegram asli (`ATTACHMENT_REQUIRED`) supaya provenance tercatat. Karena di sini VO dibuat lokal dan tidak ada lampiran masuk, audio di-mux pada level file setelah render. Stream video tidak disentuh (dibuktikan lewat MD5 payload), tetapi **track audio belum terdaftar di JobStore** — itu batasan yang harus diperbaiki bila explainer ini naik ke jalur produksi.
+- `edge-tts` (mesin VO bawaan repo) mengembalikan HTTP 403 dari endpoint Microsoft saat dipakai, dan `preview`-nya belum punya track audio. Piper dipakai sebagai pengganti, di venv terpisah di `/tmp/piper-venv` dengan model di `~/.hermes/cache/scratch/m5/piper-voices/`; tidak ada yang dipasang ke repo atau ke plugin produksi.
+- Suara Piper adalah voice berita Indonesia yang netral, bukan talent VO. Nada dan diksinya wajar tetapi tidak akan setara VO manusia.
+
+### Audit ulang setelah perbaikan
+
+| Benchmark | Frame | Durasi | Freeze terpanjang | Motion rata-rata |
+|---|---|---|---|---|
+| opening rev 4 | 600 | 20.000 s | 0.00 s | 2247 |
+| explainer rev 4 | 900 | 30.000 s | 1.00 s | 2864 |
+| story rev 3 | 1350 | 45.000 s | 0.00 s | 441 |
+| ad rev 4 | 450 | 15.000 s | 0.20 s | 410 |
+
+Semua masih di bawah ambang 0.5 s untuk hold tak sengaja. Ad membaik dari 0.63 s menjadi 0.20 s.
+
+### Regresi setelah perbaikan
+
+`PYTHONPATH=. UMP_BROWSER=1 UMP_SANDBOX_TESTS=1 python3 -m unittest discover -s tests` → **478 tes, OK (skipped=2)** dalam 100.438 s; `scripts/check.py` → `HASIL: SIAP`; `git status` bersih.
+
+### Sisa batasan
+
+- Playback 1× putaran kedua belum dilakukan; penilaian di atas berasal dari frame terdekode + uji numerik, bukan tontonan operator.
+- Audio explainer belum terdaftar di JobStore (lihat catatan di atas).
+- Palet opening dan story masih satu keluarga senja dengan sengaja; kalau kontinuitas itu tidak diinginkan, story perlu palet baru.
+
 ## Next
 
-Perbaikan berikutnya menunggu arahan: lihat keempat MP4 di 1× lalu putuskan apakah M5 cukup untuk kandidat rilis, atau perlu putaran kedua (palet story baru, VO bahasa Indonesia untuk explainer, atau aset ilustrasi lebih detail).
+Putaran kedua sudah dijalankan atas umpan balik operator. Yang menunggu: tontonan 1× ulang untuk tiga video yang diperbaiki plus explainer ber-VO, lalu keputusan apakah M5 layak jadi kandidat rilis atau butuh putaran ketiga.
