@@ -23,7 +23,7 @@ Produksi motion video UMP mengikuti brief dan medium yang diminta, bukan satu te
 - Hard cut, montage, satu dunia kontinu, minimalisme, stillness, typography, anime-inspired artwork, atau visual eksperimental sama-sama sah bila sesuai brief. Anti-PPT adalah alat diagnosis kontekstual, bukan larangan terhadap gaya tertentu.
 - Tentukan defaults yang tidak mengubah makna brief. Tanyakan satu hal hanya bila jawabannya mengubah output secara material; tawarkan beberapa konsep hanya bila pilihan kreatif memang penting.
 
-## Task routing dan mode
+## Memilih Komponen Pipeline
 
 Pilih komponen yang diperlukan dari brief; jangan memaksakan semua tahap:
 
