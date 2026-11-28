@@ -10,6 +10,26 @@ from ump_core.jobs import STAGES, DomainError, JobStore
 from ump_core import tools
 
 
+def _make_event(text, message_id, media_urls=(), media_types=(), message_type="text"):
+    """A minimal inbound Telegram DM event, shaped like the gateway's MessageEvent."""
+    from gateway.platforms.event import MessageType
+    platform = type("Platform", (), {"value": "telegram"})()
+    source = type("Source", (), {
+        "platform": platform, "chat_type": "dm", "user_id": "892369397",
+        "chat_id": "892369397", "is_bot": False,
+    })()
+    kind = getattr(MessageType, str(message_type).upper(), message_type)
+    return type("Event", (), {
+        "source": source, "message_id": message_id, "text": text,
+        "media_urls": list(media_urls), "media_types": list(media_types),
+        "message_type": kind, "raw_message": None,
+    })()
+
+
+def _make_gateway():
+    return type("Gateway", (), {"_is_user_authorized_for_source": lambda self, source, **kw: True})()
+
+
 class StageReorderTests(unittest.TestCase):
     """Style is chosen before the script is written, not after it is approved.
 
@@ -115,10 +135,24 @@ class SentenceApprovalTests(unittest.TestCase):
 
     def test_short_plain_approvals_are_accepted(self):
         """The operator should not have to type identifiers or a command form."""
-        for text in ("setuju", "ya setuju", "oke lanjut", "gas", "sip", "mantap", "lanjutkan"):
+        for text in ("setuju", "ya setuju", "oke lanjut", "gas", "sip", "mantap", "lanjutkan",
+                     "oke", "ok", "Oke", "Setuju", "Gas", "oke deh", "oke aja", "ok sip"):
             with self.subTest(text=text):
                 verdict, stage = tools.classify_approval(text, awaiting="naskah")
                 self.assertEqual((verdict, stage), ("approve", "naskah"))
+
+    def test_bare_oke_is_an_approval_not_a_hedge(self):
+        """"Oke" is the most common Indonesian yes; requiring "oke lanjut" was a defect."""
+        verdict, stage = tools.classify_approval("Oke", awaiting="brief")
+        self.assertEqual((verdict, stage), ("approve", "brief"))
+
+    def test_oke_inside_a_question_still_does_not_approve(self):
+        """Adding a bare "oke" must not make question or hedge lines approve."""
+        for text in ("oke, tapi apa brief-nya sudah benar?", "oke kalau memang begitu",
+                     "oke nanti aja", "oke belum"):
+            with self.subTest(text=text):
+                verdict, _ = tools.classify_approval(text, awaiting="brief")
+                self.assertEqual(verdict, "unclear", f"{text!r} must not approve")
 
     def test_topic_mention_disambiguates(self):
         """'setuju' with an explicit topic commits that topic, not the awaiting one."""
@@ -164,6 +198,32 @@ class SentenceApprovalTests(unittest.TestCase):
         op = mock.patch.object(tools, "_turn_operator_text", lambda: "ya setujui brief-nya")
         with op:
             self.assertEqual(tools._authorization("brief", job_id, rev), "ok")
+
+    def test_inbound_hook_records_a_plain_approval_sentence(self):
+        """The hook must capture "Setuju", not only the exact UMP APPROVE command.
+
+        It used to return early for anything that was not the command form, so the
+        sentence classifier downstream never received the operator's message and
+        every short approval failed with APPROVAL_UNCLEAR.
+        """
+        for text in ("Setuju", "Oke", "Gas", "setuju", "gas lanjut"):
+            with self.subTest(text=text):
+                tools._EVENTS.clear()
+                tools.inbound(_make_event(text, "4242"), _make_gateway())
+                self.assertEqual(tools._turn_operator_text(), text)
+
+    def test_inbound_hook_still_ignores_non_text_and_media(self):
+        """Widening the hook must not make stickers, photos or empty edits approve."""
+        cases = [
+            _make_event("", "4243"),
+            _make_event("Setuju", "4244", media_urls=["x.jpg"], media_types=["image/jpeg"]),
+            _make_event("Setuju", "4245", message_type="photo"),
+        ]
+        for event in cases:
+            with self.subTest(event=event.message_id):
+                tools._EVENTS.clear()
+                tools.inbound(event, _make_gateway())
+                self.assertEqual(tools._turn_operator_text(), "")
 
     def test_ambiguous_turn_text_raises_a_question_not_a_denial(self):
         job_id, rev = self._job_awaiting_brief()

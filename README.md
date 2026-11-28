@@ -6,8 +6,8 @@ Repo ini menyimpan keputusan editorial, template episode dan tooling dalam satu 
 
 ## Status
 
-- **Versi:** `1.4.0` — lihat [CHANGELOG.md](CHANGELOG.md) untuk rilis ini dan aturan penomoran berikutnya.
-- **Status:** workflow inti, acceptance gate, dan pipeline bertahap sudah di `main`. **18 preset style di registry, 17 `ready`**; botanical-paper masih `spec`. C1–C4 masih menunggu keputusan operator.
+- **Versi:** `2.0.0` — lihat [CHANGELOG.md](CHANGELOG.md) dan catatan rilis [`docs/RELEASE-v2.0.0.md`](docs/RELEASE-v2.0.0.md) (termasuk cara upgrade dan rollback).
+- **Status:** v2.0.0 — komposisi HTML kustom per revisi jadi jalur utama (`write_composition`), dengan renderer offline seekable, aset ber-provenance, audio/subtitle, QA gerak berbasis bukti, revision lock, dan benchmark empat video. **20 preset style di registry, 19 `ready`**; satu masih `spec`. Preset v1 tetap tersedia sebagai opsi.
 
 Style yang siap pakai: `dark-editorial`, `kinetic-bold`, `minimal-explainer`, `line-art`, `bauhaus`, `cyber-hud`, `flat-vector`, `collage`, `morph`, `paperclip`, `pixel`, `cel-boil`, `liquid`, `aurora-glass`, `synthwave`, `isometric`. Semuanya komposisi HyperFrames 1080×1920 yang datanya datang dari naskah, bukan template statis.
 

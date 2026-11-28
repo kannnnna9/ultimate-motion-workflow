@@ -1,5 +1,5 @@
 name: ump
-version: 1.6.2
+version: 2.0.0
 description: Produce, review and render portrait motion videos.
 author: kannnnna9
 requires_hermes: '>=0.21.5'

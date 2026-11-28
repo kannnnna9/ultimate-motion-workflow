@@ -39,9 +39,9 @@ _HEDGE_WORDS = ("anggap", "dianggap", "anggapnya", "kalau", "kalo", "seandainya"
                 "menurutku", "menurutmu", "kayaknya", "sepertinya", "mungkin",
                 "bisa dianggap", "anggap saja", "model bilang", "asumsi",
                 "nanti", "besok", "tunggu", "belum")
-_APPROVE_WORDS = ("setuju", "setujui", "approved", "approve", "acc", "oke setuju",
-                  "ok setuju", "sip", "sip setuju", "lanjut", "lanjutkan", "gas",
-                  "gaskeun", "silakan lanjut", "boleh lanjut", "terima", "mantap",
+_APPROVE_WORDS = ("setuju", "setujui", "approved", "approve", "acc", "oke", "ok",
+                  "oke setuju", "ok setuju", "sip", "sip setuju", "lanjut", "lanjutkan",
+                  "gas", "gaskeun", "silakan lanjut", "boleh lanjut", "terima", "mantap",
                   "cocok", "pas", "bagus lanjut", "ya setuju", "iya setuju", "yoi",
                   "boleh", "setuju banget", "fix", "okedeh", "oke deh", "oke lah", "okelah")
 _REJECT_WORDS = ("tolak", "jangan", "batal", "tidak setuju", "gak setuju", "ga setuju",
@@ -116,7 +116,12 @@ def inbound(event, gateway, **_):
     if not (((approval or unlock) and event.message_type == MessageType.TEXT and not event.media_urls)
             or ((voice or audio_import) and len(event.media_urls or ()) == 1
                 and len(event.media_types or ()) == 1 and event.media_types[0].startswith('audio/'))):
-        return
+        # A plain sentence of approval ("Setuju", "Oke", "gas") is authorisation too.
+        # This guard used to return here, so the classifier below could never see
+        # anything except the exact command form — every short approval was dropped
+        # before reaching it.
+        if not (event.message_type == MessageType.TEXT and not event.media_urls and text.strip()):
+            return
     if not gateway._is_user_authorized_for_source(source, allow_adapter_delegation=False):
         return
     key = (_home(), str(source.chat_id), str(source.user_id), str(event.message_id))
